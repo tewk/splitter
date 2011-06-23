@@ -47,16 +47,30 @@ let splitFuncsToTU file =
       | a -> true) 
     file.globals in 
   
-    Cil.iterGlobals file (fun glob -> match glob with
-      Cil.GFun(fd ,_) ->
-        (* build new file for glob *)
-        let fileN = { fileName = fd.C.svar.C.vname ^ "_func.c"; globals = List.append otherGlobals [glob]; globinit = None; globinitcalled = false; } in
+  Cil.iterGlobals file (fun glob -> match glob with
+    Cil.GFun(fd, loc) ->
+      (* build new GFun for glob *)
+      let funcN = GFun({ svar = fd.svar;
+        sformals = [];
+        slocals  = [];
+        smaxid = fd.smaxid;
+        sbody = fd.sbody;
+        smaxstmtid = fd.smaxstmtid;
+        sallstmts = fd.sallstmts; }, loc) 
+      and varinfos2GVarDecls vs = List.map (fun x -> GVarDecl(x, loc)) vs in
+      (* build new file for glob *)
+        let fileN = { fileName = fd.C.svar.C.vname ^ "_func.c"; 
+                      globals = (List.append (List.append (List.append
+                      otherGlobals (List.map (fun x -> GVarDecl(x, loc))
+                      fd.sformals)) (varinfos2GVarDecls fd.slocals)) [funcN]);
+                      globinit = None; 
+                      globinitcalled = false; } in
           let channel = open_out fileN.fileName in
-             (* remove unneededs, root glob *)
-             Rmtmps.removeUnusedTemps ~isRoot:(fun x -> (Rmtmps.isExportedRoot x) || x == glob) fileN;
+             (* remove unneededs, root funcN *)
+             Rmtmps.removeUnusedTemps ~isRoot:(fun x -> (Rmtmps.isExportedRoot x) || x == funcN) fileN;
              dumpFile defaultCilPrinter channel fileN.fileName fileN;
              close_out channel
-      | _ -> ()) 
+    | _ -> ()) 
 
 let dosplitter file =
   ignore (Partial.calls_end_basic_blocks file) ; 
