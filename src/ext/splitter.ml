@@ -40,9 +40,28 @@ class dumpGlobalsVisitor file = object (self)
       | _ -> DoChildren
 end
 
+(* Split functions into their own translation units *)
+let splitFuncsToTU file =
+  let otherGlobals = List.filter (fun x -> match x with
+      Cil.GFun(fd ,_) -> false
+      | a -> true) 
+    file.globals in 
+  
+    Cil.iterGlobals file (fun glob -> match glob with
+      Cil.GFun(fd ,_) ->
+        (* build new file for glob *)
+        let fileN = { fileName = fd.C.svar.C.vname ^ "_func.c"; globals = List.append otherGlobals [glob]; globinit = None; globinitcalled = false; } in
+          let channel = open_out fileN.fileName in
+             (* remove unneededs, root glob *)
+             Rmtmps.removeUnusedTemps ~isRoot:(fun x -> (Rmtmps.isExportedRoot x) || x == glob) fileN;
+             dumpFile defaultCilPrinter channel fileN.fileName fileN;
+             close_out channel
+      | _ -> ()) 
+
 let dosplitter file =
   ignore (Partial.calls_end_basic_blocks file) ; 
   ignore (Partial.globally_unique_vids file) ; 
+  ignore (splitFuncsToTU file);
   Cil.iterGlobals file (fun glob -> match glob with
     Cil.GFun(fd ,_) ->
       Cil.prepareCFG fd ;
