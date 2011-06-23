@@ -1,0 +1,3 @@
+#!/usr/bin/env perl
+
+`bin/cilly --save-temps=k --dosplitter $ARGV[0]`;
