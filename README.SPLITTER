@@ -1,0 +1,6 @@
+Run the following commands to build splitter.
+
+./configure 
+make
+./splitter
+less mix_row_rijndael_orig.i.c
