@@ -3,42 +3,12 @@ open Cil
 module C = Cil
 module RD = Reachingdefs
 
-let block_depth = ref 0
-
-class deblockifyVisitor file = object (self)
-  inherit nopCilVisitor
-
-(*
-  method vinst i = kklog "ST %t" (function (m : unit) -> d_instr () i); DoChildren
-  method vstmt s = kklog "ST %t" (function (m : unit) -> d_stmt  () s); DoChildren
-*)
-
-  method vinst i =
-    match i with
-      | Set(lval, expr, loc) -> DoChildren
-      | Call(lval, Lval(Var(vi), io), args, loc) -> DoChildren
-      | _ -> DoChildren
-
-(*
-  method vattr a =
-    match a with
-      Attr(n, ps) -> kklog "ATTR %a\n" d_attr a; SkipChildren
-*)
-
-  method vblock b = block_depth := !block_depth + 1; (* kklog "BLOCK %i\n" !block_depth;  *)
-    let bpost children = block_depth := !block_depth - 1; children
-      in ChangeDoChildrenPost(b, bpost);
-(*
-  method vfunc f = kklog "FUNC %s\n" f.svar.vname; DoChildren
-*)
-
-  method vglob g =
-    match g with
-      (*  GVarDecl(vi, loc) -> dumpgvarinfo "d" g vi loc *)
-      (* | GVar(vi, b, loc) -> dumpgvarinfo "v" g vi loc *)
-      (* | GFun(f, loc) -> kklog "FUNC "; kklogvarinfo f.svar loc; kklog "\n"; DoChildren *)
-      | _ -> DoChildren
-end
+(* print list of strings to stderr *)
+let make_make_file lst =
+  let rec w o lst = match lst with
+  | [] -> ()
+  | h :: t -> fprintf o "%s\n" h; w o t in
+    w stderr lst
 
 (* build a GFun from a fundec, name suffix (txt), loc stmt list *)
 let buildGFun (fd : fundec) (txt : string) (loc : location) (b : stmt list) : global =
@@ -66,7 +36,7 @@ let buildGFun (fd : fundec) (txt : string) (loc : location) (b : stmt list) : gl
         sallstmts  = fd.sallstmts; }, loc)
 
 
-exception Duh;;
+exception Not_A_GFun_NEVER_GET_HERE;;
 
 let instr2stmt x = {labels = []; skind = x; sid = 0; succs = []; preds = []};;
 
@@ -78,13 +48,17 @@ let block2callsite_and_func fd txt loc b =
    match blockfunc with
    | GFun(fn, ln) -> let callstmt = call2stmt (Call( None, Lval( Var(fn.svar), NoOffset), [], ln)) in
          (callstmt, blockfunc)
-   | _ -> raise Duh
+   | _ -> raise Not_A_GFun_NEVER_GET_HERE
 
 
 let rec deblockify fd body loc nexti =
+  (* dump statement nodes *)
   let dumps d s =
-    Printf.fprintf stderr "\n***%s***\n" d;
-    (dumpStmt defaultCilPrinter stderr 2 s) in
+    Printf.fprintf stderr "\n*** %s ***\n" d;
+    (dumpStmt defaultCilPrinter stderr 2 s);
+    Printf.fprintf stderr "\n"
+   in
+  (* deblockify worker *)
   let rec dbw (stmts : stmt list) (funcs : global list)  (nstmts : stmt list) = match stmts with
   | [] -> ({ battrs = fd.sbody.battrs; bstmts = (List.rev nstmts)}, (List.rev funcs))
   | ({skind  = Block(b) } as h) :: t -> 
@@ -116,9 +90,9 @@ let splitFuncsToTU file =
       let ni = ref 0 in
       let nexti = function () -> (ni := (!ni + 1)); !ni in 
 
-      Printf.fprintf stderr "\n\n=============\n%s\n==============\n\n" fd.svar.vname;
+      Printf.fprintf stderr "\n\n==============\n%s\n==============\n\n" fd.svar.vname;
       let new_body, funcs = deblockify fd fd.sbody loc nexti in
-      (* build new GFun for func *)
+      (* build new Cil.GFun for func *)
       let funcN = GFun({ 
         svar       = fd.svar;
         sformals   = [];
@@ -128,8 +102,9 @@ let splitFuncsToTU file =
         smaxstmtid = fd.smaxstmtid;
         sallstmts  = fd.sallstmts; }, loc)
       and varinfos2GVarDecls vs = List.map (fun x -> GVarDecl(x, loc)) vs in
-      (* build new file for func *)
-        let fileN = { fileName = fd.C.svar.C.vname ^ "_func.c"; 
+      (* build new Cil.file for func *)
+        let oldname = (String.sub file.fileName 2 ((String.length file.fileName) - 2)) in
+        let fileN = { fileName = fd.C.svar.C.vname ^ "_" ^ oldname ^ ".c"; 
                       globals = (List.append (List.append (List.append (List.append
                         otherGlobals 
                         funcs) 
@@ -139,7 +114,7 @@ let splitFuncsToTU file =
                       globinit = None; 
                       globinitcalled = false; } in
           let channel = open_out fileN.fileName in
-             (* remove unneededs, root funcN *)
+             (* remove unuseds except for root funcN which may be static *)
              Rmtmps.removeUnusedTemps ~isRoot:(fun x -> (Rmtmps.isExportedRoot x) || x == funcN) fileN;
              dumpFile defaultCilPrinter channel fileN.fileName fileN;
              close_out channel;
@@ -149,7 +124,7 @@ let splitFuncsToTU file =
 let dosplitter file =
   ignore (Partial.calls_end_basic_blocks file) ; 
   ignore (Partial.globally_unique_vids file) ; 
-  ignore (splitFuncsToTU file);
+  make_make_file (splitFuncsToTU file);
   Cil.iterGlobals file (fun glob -> match glob with
     Cil.GFun(fd ,_) ->
       Cil.prepareCFG fd ;
