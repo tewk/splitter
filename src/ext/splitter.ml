@@ -10,12 +10,29 @@ let make_make_file lst =
   | h :: t -> fprintf o "%s\n" h; w o t in
     w stderr lst
 
+let remove_static v = {
+  vname       = v.vname;
+  vtype       = v.vtype;
+  vstorage    = (match v.vstorage with
+                  | Static -> (Printf.fprintf stderr "%s is STATIC\n" v.vname) ; NoStorage
+                  | _ -> v.vstorage);
+  vglob       = v.vglob;
+  vinline     = v.vinline;
+  vattr       = v.vattr;
+  vdecl       = v.vdecl;
+  vid         = v.vid;
+  vaddrof     = v.vaddrof;
+  vreferenced = v.vreferenced;
+  vdescr      = v.vdescr;
+  vdescrpure  = v.vdescrpure;}
+
 (* build a GFun from a fundec, name suffix (txt), loc stmt list *)
 let buildGFun (fd : fundec) (txt : string) (loc : location) (b : stmt list) : global =
+
   let appendVarName v txt = {
     vname       = v.vname ^ txt;
     vtype       = v.vtype;
-    vstorage    = v.vstorage;
+    vstorage    = Static;
     vglob       = v.vglob;
     vinline     = v.vinline;
     vattr       = v.vattr;
@@ -94,7 +111,7 @@ let splitFuncsToTU file =
       let new_body, funcs = deblockify fd fd.sbody loc nexti in
       (* build new Cil.GFun for func *)
       let funcN = GFun({ 
-        svar       = fd.svar;
+        svar       = remove_static fd.svar;
         sformals   = [];
         slocals    = [];
         smaxid     = fd.smaxid;
