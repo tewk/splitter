@@ -124,9 +124,9 @@ let splitFuncsToTU file =
         let fileN = { fileName = fd.C.svar.C.vname ^ "_" ^ oldname ^ ".c"; 
                       globals = (List.append (List.append (List.append (List.append
                         otherGlobals 
-                        funcs) 
                         (varinfos2GVarDecls fd.sformals)) 
                         (varinfos2GVarDecls fd.slocals)) 
+                        funcs) 
                         [funcN]);
                       globinit = None; 
                       globinitcalled = false; } in
