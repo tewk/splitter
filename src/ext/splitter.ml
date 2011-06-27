@@ -131,7 +131,8 @@ let splitFuncsToTU file =
         sallstmts  = fd.sallstmts; }, loc)
       and varinfos2GVarDecls vs = List.map (fun x -> GVarDecl(x, loc)) vs in
       (* build new Cil.file for func *)
-        let oldname = (String.sub file.fileName 2 ((String.length file.fileName) - 2)) in
+        (* remove "k/" from file.fileName that the splitter script adds *)
+        let oldname = (String.sub file.fileName 2 ((String.length file.fileName) - 2)) in 
         let fileN = { fileName = fd.C.svar.C.vname ^ "_" ^ oldname ^ ".c"; 
                       globals = (List.append (List.append (List.append (List.append
                         otherGlobals 
