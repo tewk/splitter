@@ -54,14 +54,15 @@ let buildGFun (fd : fundec) (txt : string) (loc : location) (b : stmt list) : gl
 
 
 exception Not_A_GFun_NEVER_GET_HERE;;
+exception GOTOS_NOT_ALLOWED_YET;;
 
 let instr2stmt x = {labels = []; skind = x; sid = 0; succs = []; preds = []};;
 
 (* generates a callstmt and function definition from a block node *)
-let block2callsite_and_func fd txt loc b =
+let block2callsite_and_func fd txt loc lofstmts =
   (* build a stmt from a call node *)
   let call2stmt call = instr2stmt (Instr [call]) in
-  let blockfunc = (buildGFun fd txt loc b) in
+  let blockfunc = (buildGFun fd txt loc lofstmts) in
    match blockfunc with
    | GFun(fn, ln) -> let callstmt = call2stmt (Call( None, Lval( Var(fn.svar), NoOffset), [], ln)) in
          (callstmt, blockfunc)
@@ -78,22 +79,32 @@ let rec deblockify fd body loc nexti =
   (* deblockify worker *)
   let rec dbw (stmts : stmt list) (funcs : global list)  (nstmts : stmt list) = match stmts with
   | [] -> ({ battrs = fd.sbody.battrs; bstmts = (List.rev nstmts)}, (List.rev funcs))
-  | ({skind  = Block(b) } as h) :: t -> 
-      dumps "Block" h;
+  | ({skind  = Block(b) } as stmt) :: t -> 
+      dumps "Block" stmt;
       let txt = ("_" ^ (string_of_int (nexti ()))) in
-      let callstmt, func = block2callsite_and_func fd txt loc [h] in
+      let callstmt, func = block2callsite_and_func fd txt loc [stmt] in
         dbw t (func :: funcs) (callstmt :: nstmts)
   | ({skind  = Loop(b, loc, s1, s2) } as h) :: t -> 
       dumps "Loop" h;
       let new_body, nfuncs = deblockify fd b loc nexti in
       let st = instr2stmt (Loop(new_body, loc, s1, s2)) in
         dbw t (List.append nfuncs funcs) (st :: nstmts)
-  | ({skind  = Instr(is) }          as h) :: t -> dumps "Instr"  h; dbw t funcs (h :: nstmts)
-  | ({skind  = If(a, b, c, d) }     as h) :: t -> dumps "If"     h; dbw t funcs (h :: nstmts)
-  | ({skind  = Switch(a, b, c, d) } as h) :: t -> dumps "Switch" h; dbw t funcs (h :: nstmts)
-  | ({skind  = Goto(a, b) }         as h) :: t -> dumps "Goto"   h; dbw t funcs (h :: nstmts)
-  | ({skind  = Return(a, b) }       as h) :: t -> dumps "Return" h; dbw t funcs (h :: nstmts)
-  | h :: t                                     -> dumps "Other"  h; dbw t funcs (h :: nstmts) in
+  | ({skind  = Switch(exp1, b, stmts, loc) } as h) :: t ->
+      dumps "Switch" h;
+      let new_body, nfuncs = deblockify fd b loc nexti in
+      let st = instr2stmt (Switch(exp1, new_body, stmts, loc)) in
+        dbw t (List.append nfuncs funcs) (st :: nstmts)
+  | ({skind  = Instr(is)} as stmt) :: t ->
+      dumps "Instr" stmt;
+      let txt = ("_" ^ (string_of_int (nexti ()))) in
+      let callstmt, func = block2callsite_and_func fd txt loc [stmt] in
+        dbw t (func :: funcs) (callstmt :: nstmts)
+  | ({skind  = Break(loc) }     as h) :: t -> dumps "Break"    h; dbw t funcs (h :: nstmts)
+  | ({skind  = Continue(loc) }  as h) :: t -> dumps "Continue" h; dbw t funcs (h :: nstmts)
+  | ({skind  = If(a, b, c, d) } as h) :: t -> dumps "If"       h; dbw t funcs (h :: nstmts)
+  | ({skind  = Goto(a, b) }     as h) :: t -> dumps "Goto"     h; raise GOTOS_NOT_ALLOWED_YET ; dbw t funcs (h :: nstmts)
+  | ({skind  = Return(a, b) }   as h) :: t -> dumps "Return"   h; dbw t funcs (h :: nstmts)
+  | h :: t                                 -> dumps "Other"    h; dbw t funcs (h :: nstmts) in
     dbw body.bstmts [] []
 
 (* Split functions into their own translation units *)
