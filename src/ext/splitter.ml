@@ -67,10 +67,10 @@ let buildGFun (fd : fundec) (txt : string) (loc : location) (b : block) : global
         sallstmts  = fd.sallstmts; }, loc)
 
 
-exception Not_A_GFun_NEVER_GET_HERE;;
-exception GOTOS_NOT_ALLOWED_YET;;
+exception Not_A_GFun_NEVER_GET_HERE
+exception GOTOS_NOT_ALLOWED_YET
 
-let instr2stmt stmt x = {labels = stmt.labels; skind = x; sid = 0; succs = []; preds = []};;
+let instr2stmt stmt x = {labels = stmt.labels; skind = x; sid = 0; succs = []; preds = []}
 
 
 let filter_case s = {
@@ -80,7 +80,7 @@ let filter_case s = {
   skind  = s.skind; 
   sid    = s.sid;
   succs  = s.succs; 
-  preds  = s.preds};;
+  preds  = s.preds}
 
 (* generates a callstmt and function definition from a block node *)
 let block2callsite_and_func fd txt loc stmt b =
@@ -160,9 +160,7 @@ let splitFuncsToTU file =
         sallstmts  = fd.sallstmts; }, loc)
       and varinfos2GVarDecls vs = List.map (fun x -> GVarDecl(x, loc)) vs in
       (* build new Cil.file for func *)
-        (* remove "k/" from file.fileName that the splitter script adds *)
-        let oldname = (String.sub file.fileName 2 ((String.length file.fileName) - 2)) in 
-        let fileN = { fileName = fd.C.svar.C.vname ^ "_" ^ oldname ^ ".c"; 
+        let fileN = { fileName = file.fileName ^ "_" ^ fd.C.svar.C.vname ^ ".c";
                       globals = (List.append (List.append (List.append (List.append
                         otherGlobals 
                         (varinfos2GVarDecls fd.sformals)) 

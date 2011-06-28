@@ -1,3 +1,5 @@
 #!/usr/bin/env perl
-my $arg = $ARV[0] || "rijndael_orig.c";
+my $arg = $ARGV[0] || "rijndael_orig.c";
 `bin/cilly --save-temps=k --dosplitter --noPrintLn $arg`;
+print "$ARGV[0]\n";
+print "$arg\n";
