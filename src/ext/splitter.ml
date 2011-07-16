@@ -116,7 +116,12 @@ let rec split_block width (body : block) (loc : location) func_creator =
     match stmts with 
     | [] -> ({ battrs = body.battrs; bstmts = (List.rev newstmts)}, (List.rev funcs)) 
     | h :: t when not (stmtHasReturn h) ->
-        bw t (h :: newstmts) oldstmts (left - 1) funcs
+       ( match left with
+        | 0 -> 
+          let newcall, func = func_creator newstmts loc in 
+            bw t (h :: (newcall :: oldstmts)) [] width (func :: funcs)
+        | _ ->
+          bw t (h :: newstmts) oldstmts (left - 1) funcs)
     | h :: t -> 
         (match newstmts with
         | [] -> bw t (h :: oldstmts) [] width funcs
