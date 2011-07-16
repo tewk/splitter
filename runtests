@@ -1,0 +1,21 @@
+#!/usr/bin/env perl
+use 5.010;
+
+sub sayrun {
+  my  $cmd = shift;
+  say $cmd;
+  `$cmd`;
+}
+
+sub splitter {
+  my $source_file = shift;
+  my $out_dir = $source_file;
+  $out_dir =~ s/\./_/g;
+  $out_dir =~ s/\//_/g;
+  mkdir $out_dir;
+  `bin/cilly --save-temps=$out_dir --dosplitter --noPrintLn $source_file`;
+  sayrun("gcc -c -O -w $out_dir/*.i_*.c");
+}
+
+splitter("rijndael_orig.c");
+splitter("sqlite3.c");
