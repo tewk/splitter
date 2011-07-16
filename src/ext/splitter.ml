@@ -1,5 +1,6 @@
 open Pretty
 open Cil
+open Splitter_utils
 module C = Cil
 module RD = Reachingdefs
 
@@ -12,7 +13,7 @@ let genNextCounter = function () ->
 let make_make_file lst =
   let rec w o lst = match lst with
   | [] -> ()
-  | h :: t -> (fprintf o "%s\n" h); w o t; () in
+  | h :: t -> (fprintf o "%s\n" h); w o t in
     w stderr lst
 
 let remove_static v = {
@@ -45,11 +46,10 @@ let make_static v = {
   vdescr      = v.vdescr;
   vdescrpure  = v.vdescrpure;}
 
-(* build a GFun from a fundec, name suffix (txt), loc stmt list *)
-let buildGFun (fd : fundec) (txt : string) (loc : location) (b : block) : global =
-
-  let appendVarName v txt = {
-    vname       = v.vname ^ txt;
+(* build a GFun from a fundec, i generator, loc stmt list *)
+let buildGFun (fd : fundec) nexti (loc : location) (b : block) : global =
+  let appendVarName v = {
+    vname       = v.vname ^ "_" ^ (string_of_int (nexti ()));
     vtype       = v.vtype;
     vstorage    = Static;
     vglob       = v.vglob;
@@ -63,7 +63,7 @@ let buildGFun (fd : fundec) (txt : string) (loc : location) (b : block) : global
     vdescrpure  = v.vdescrpure;} in
   
   GFun({ 
-        svar       = appendVarName fd.svar txt;
+        svar       = appendVarName fd.svar;
         sformals   = [];
         slocals    = [];
         smaxid     = fd.smaxid;
@@ -72,9 +72,9 @@ let buildGFun (fd : fundec) (txt : string) (loc : location) (b : block) : global
         sallstmts  = fd.sallstmts; }, loc)
 
 exception Not_A_GFun_NEVER_GET_HERE
-exception GOTOS_NOT_ALLOWED_YET
 
 let instr2stmt stmt x = {labels = stmt.labels; skind = x; sid = 0; succs = []; preds = []}
+let empty_stmt = {labels = []; skind = Instr([]); sid = 0; succs = []; preds = []}
 
 
 let filter_case s = {
@@ -87,58 +87,80 @@ let filter_case s = {
   preds  = s.preds}
 
 (* generates a callstmt and function definition from a block node *)
-let block2callsite_and_func fd txt loc stmt b =
+let block2callsite_and_func fd nexti loc stmt b =
   (* build a stmt from a call node *)
   let call2stmt call = instr2stmt stmt (Instr [call]) in
-  let blockfunc = (buildGFun fd txt loc b) in
+  let blockfunc = (buildGFun fd nexti loc b) in
    match blockfunc with
    | GFun(fn, ln) -> let callstmt = call2stmt (Call( None, Lval( Var(fn.svar), NoOffset), [], ln)) in
          (callstmt, blockfunc)
    | _ -> raise Not_A_GFun_NEVER_GET_HERE
 
+let dump_stmt d s =
+  Printf.fprintf stderr "*** %s *** " d;
+  (dumpStmt defaultCilPrinter stderr 2 s);
+  Printf.fprintf stderr "\n"
 
-let rec deblockify fd body loc nexti =
-  (* dump statement nodes *)
-  let dumps d s =
-    Printf.fprintf stderr "\n*** %s ***\n" d;
-    (dumpStmt defaultCilPrinter stderr 2 s);
-    Printf.fprintf stderr "\n"
-   in
-  (* deblockify worker *)
+let gen_func_creator fd nexti =
+  (fun stmts loc ->
+    let call2stmt call = instr2stmt (List.hd stmts) (Instr [call]) in
+    let blockfunc = (buildGFun fd nexti loc {battrs = fd.sbody.battrs; bstmts = stmts} ) in
+     (match blockfunc with
+     | GFun(fn, ln) -> let callstmt = call2stmt (Call( None, Lval( Var(fn.svar), NoOffset), [], ln)) in
+           (callstmt, blockfunc)
+     | _ -> raise Not_A_GFun_NEVER_GET_HERE))
+
+
+let rec split_block width (body : block) (loc : location) func_creator =
+  let rec bw (stmts : stmt list) (newstmts : stmt list) (oldstmts : stmt list) (left : int) (funcs : global list) =
+    match stmts with 
+    | [] -> ({ battrs = body.battrs; bstmts = (List.rev newstmts)}, (List.rev funcs)) 
+    | h :: t when not (stmtHasReturn h) ->
+        bw t (h :: newstmts) oldstmts (left - 1) funcs
+    | h :: t -> 
+        (match newstmts with
+        | [] -> bw t (h :: oldstmts) [] width funcs
+        | nb -> 
+          let newcall, func = func_creator newstmts loc in 
+            bw t (h :: (newcall :: oldstmts)) [] width (func :: funcs)) in
+
+    bw body.bstmts [] [] width []
+
+let rec split_block2 fd body loc nexti =
+  (* split_block2 worker *)
   let rec dbw (stmts : stmt list) (funcs : global list)  (nstmts : stmt list) = match stmts with
   | [] -> ({ battrs = fd.sbody.battrs; bstmts = (List.rev nstmts)}, (List.rev funcs))
-  | ({skind  = Block(b) } as stmt) :: t -> 
-      dumps "Block" stmt;
-      let txt = ("_" ^ (string_of_int (nexti ()))) in
-      let callstmt, func = block2callsite_and_func fd txt loc stmt b in
+  | h :: t -> match h.skind with
+  | Block(b) -> 
+      dump_stmt "Block" h;
+      let callstmt, func = block2callsite_and_func fd nexti loc h b in
         dbw t (func :: funcs) (callstmt :: nstmts)
-  | ({skind  = Loop(b, loc, s1, s2) } as h) :: t -> 
-      dumps "Loop" h;
-      let new_body, nfuncs = deblockify fd b loc nexti in
+  | Loop(b, loc, s1, s2) -> 
+      dump_stmt "Loop" h;
+      let new_body, nfuncs = split_block2 fd b loc nexti in
       let st = instr2stmt h (Loop(new_body, loc, s1, s2)) in
         dbw t (List.append nfuncs funcs) (st :: nstmts)
-  | ({skind  = Switch(exp1, b, stmts, loc) } as h) :: t ->
-      dumps "Switch" h;
-      let new_body, nfuncs = deblockify fd b loc nexti in
+  | Switch(exp1, b, stmts, loc) ->
+      dump_stmt "Switch" h;
+      let new_body, nfuncs = split_block2 fd b loc nexti in
       let st = instr2stmt h (Switch(exp1, new_body, stmts, loc)) in
         dbw t (List.append nfuncs funcs) (st :: nstmts)
-  | ({skind  = Instr(is)} as stmt) :: t ->
-      dumps "Instr" stmt;
-      let txt = ("_" ^ (string_of_int (nexti ()))) in
-      let callstmt, func = block2callsite_and_func fd txt loc stmt { battrs = []; bstmts = [ (filter_case stmt) ] } in
+  | Instr(is) ->
+      dump_stmt "Instr" h ;
+      let callstmt, func = block2callsite_and_func fd nexti loc h { battrs = []; bstmts = [ (filter_case h) ] } in
         dbw t (func :: funcs) (callstmt :: nstmts)
-  | ({skind  = If(expr, _then, _else, loc) } as h) :: t ->
-      dumps "If" h;
-      let tnew_body, tnfuncs = deblockify fd _then loc nexti in
-      let enew_body, enfuncs = deblockify fd _else loc nexti in
+  | If(expr, _then, _else, loc) ->
+      dump_stmt "If" h;
+      let tnew_body, tnfuncs = split_block2 fd _then loc nexti in
+      let enew_body, enfuncs = split_block2 fd _else loc nexti in
       let st = instr2stmt h (If(expr, tnew_body, enew_body, loc)) in
         dbw t (List.append (List.append tnfuncs enfuncs) funcs) (st :: nstmts)
-  | ({skind  = Break(loc) }     as h) :: t -> dumps "Break"    h; dbw t funcs (h :: nstmts)
-  | ({skind  = Continue(loc) }  as h) :: t -> dumps "Continue" h; dbw t funcs (h :: nstmts)
-  | ({skind  = Goto(a, b) }     as h) :: t -> dumps "Goto"     h; dbw t funcs (h :: nstmts)
-  | ({skind  = Return(a, b) }   as h) :: t -> dumps "Return"   h; dbw t funcs (h :: nstmts)
-  | ({skind  = TryFinally(b, b2, loc)} as h) :: t -> dumps "Other"    h; dbw t funcs (h :: nstmts)
-  | ({skind  = TryExcept(b, ilexpp, b2, loc)} as h) :: t -> dumps "Other"    h; dbw t funcs (h :: nstmts) in
+  | Break(loc)    -> dump_stmt "Break"    h; dbw t funcs (h :: nstmts)
+  | Continue(loc) -> dump_stmt "Continue" h; dbw t funcs (h :: nstmts)
+  | Goto(a, b)    -> dump_stmt "Goto"     h; dbw t funcs (h :: nstmts)
+  | Return(a, b)  -> dump_stmt "Return"   h; dbw t funcs (h :: nstmts)
+  | TryFinally(b, b2, loc) -> dump_stmt "TryFinally"    h; dbw t funcs (h :: nstmts)
+  | TryExcept(b, ilexpp, b2, loc) -> dump_stmt "TryExcept"    h; dbw t funcs (h :: nstmts) in
     dbw body.bstmts [] []
 
 let dump_func_to_file funcN fileN =
@@ -171,39 +193,15 @@ let rec hasGoto lst f =
         | Label(_,_,true) -> true
         | _ -> hasGoto t f
 
-let dump_stmt d s =
-  Printf.fprintf stderr "*** %s *** " d;
-  (dumpStmt defaultCilPrinter stderr 2 s);
-  Printf.fprintf stderr "\n"
-
-let rec findGotos fd body loc nexti =
-  let rec dbw (stmts : stmt list)  = match stmts with
-  | [] -> ({ battrs = fd.sbody.battrs; bstmts = []}, [])
-  | ({skind = Block(b) }                    as h) :: t -> findGotos fd b loc nexti ; dbw t
-  | ({skind = Loop(b, loc, s1, s2) }        as h) :: t -> findGotos fd b loc nexti ; dbw t
-  | ({skind = Switch(expr, b, stmts, loc) } as h) :: t -> findGotos fd b loc nexti ; dbw t
-  | ({skind = Instr(is)}                    as h) :: t -> dbw t
-  | ({skind = If(expr, _then, _else, loc) } as h) :: t -> findGotos fd _then loc nexti ;
-                                                          findGotos fd _else loc nexti ; dbw t
-  | ({skind = Break(loc) }                  as h) :: t -> dump_stmt "Break" h; dbw t
-  | ({skind = Continue(loc) }               as h) :: t -> dump_stmt "Continue" h; dbw t
-  | ({skind = Return(expr,loc) }            as h) :: t -> dump_stmt "Return" h; dbw t
-  | ({skind = Goto(stmtref, loc) }          as h) :: t -> (match !stmtref with
-    | {labels = ls;} when (hasGoto ls false) -> dump_stmt "Goto" h; dbw t
-    | _ -> dbw t)
-  | ({skind = TryFinally(b, b2, loc)} as h) :: t -> dump_stmt "Other"    h; dbw t
-  | ({skind = TryExcept(b, ilexpp, b2, loc)} as h) :: t -> dump_stmt "Other"    h; dbw t  in
-    dbw body.bstmts
-
 let rec hasBCorG (bodyb : block) : bool =
   let rec dbw (stmts : stmt list) : bool = match stmts with
   | [] -> false
   | h :: t -> match h.skind with
-    | Block(b)                    -> hasBCorG b ; dbw t
-    | Loop(b, loc, s1, s2)        -> hasBCorG b ; dbw t
-    | Switch(expr, b, stmts, loc) -> hasBCorG b ; dbw t
+    | Block(b)                    -> hasBCorG b || dbw t
+    | Loop(b, loc, s1, s2)        -> hasBCorG b || dbw t
+    | Switch(expr, b, stmts, loc) -> hasBCorG b || dbw t
     | Instr(is)                   -> dbw t
-    | If(expr, _then, _else, loc) -> hasBCorG _then ; hasBCorG _else ; dbw t
+    | If(expr, _then, _else, loc) -> hasBCorG _then || hasBCorG _else|| dbw t
     | Break(loc)                  -> true
     | Continue(loc)               -> true
     | Return(expr,loc)            -> dbw t
@@ -223,11 +221,12 @@ let splitFuncsToTU file =
   Cil.foldGlobals file (fun fns func -> match func with
     Cil.GFun(fd, loc) ->
       Printf.fprintf stderr "============== %s ==============\n" fd.svar.vname;
-      let new_body, funcs = match hasBCorG fd.sbody with
+      let new_body, funcs = match (hasBCorG fd.sbody) with
       | true -> 
-          Printf.fprintf stderr "^^^^^^^^^^^^^^ has BCorG  ^^^^^^^^^^^^^^\n";
+          (* Printf.fprintf stderr "^^^^^^^^^^^^^^ has BCorG  ^^^^^^^^^^^^^^\n";
+           *)
           fd.sbody, [] 
-      | _ -> (deblockify fd fd.sbody loc (genNextCounter () )) in
+      | false -> (split_block 4 fd.sbody loc (gen_func_creator fd (genNextCounter ()))) in
         (* build new Cil.GFun for func *)
         let funcN = GFun({ 
           svar       = remove_static fd.svar;
