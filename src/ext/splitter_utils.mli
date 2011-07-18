@@ -18,3 +18,5 @@ val stmtsHaveReturns: stmt list -> bool
 val stmtHasReturn: stmt -> bool
 
 val countReturns: block -> int
+
+val hasUnsplittable: stmt -> bool

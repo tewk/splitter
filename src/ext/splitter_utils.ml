@@ -122,3 +122,63 @@ let rec countReturns (bodyb : block) : int =
     | TryFinally(b, b2, loc)        -> dump_stmt "TryFinally" h; raise TryStmtNotSupported; dbw t cnt
     | TryExcept(b, ilexpp, b2, loc) -> dump_stmt "TryExcept"  h; raise TryStmtNotSupported; dbw t cnt  in
     dbw bodyb.bstmts 0
+
+let rec hasRGs (stmts : stmt list ) : bool =
+  let rec dbw (stmts : stmt list) : bool = match stmts with
+  | [] -> false
+  | h :: t -> match h.skind with
+    | Block(b)                    -> hasRGs b.bstmts || dbw t
+    | Loop(b, loc, s1, s2)        -> hasRGs b.bstmts || dbw t
+    | Switch(expr, b, stmts, loc) -> hasRGs b.bstmts || dbw t
+    | Instr(is)                   -> dbw t
+    | If(expr, _then, _else, loc) -> hasRGs _then.bstmts || hasRGs _else.bstmts || dbw t
+    | Break(loc)                  -> dbw t
+    | Continue(loc)               -> dbw t
+    | Return(expr,loc)            -> true
+    | Goto(stmtref, loc)          -> (match !stmtref with
+      | {labels = ls;} when (hasGoto ls false) -> true
+      | _ -> dbw t)
+    | TryFinally(b, b2, loc)        -> dump_stmt "TryFinally" h; raise TryStmtNotSupported; dbw t
+    | TryExcept(b, ilexpp, b2, loc) -> dump_stmt "TryExcept"  h; raise TryStmtNotSupported; dbw t  in
+    dbw stmts
+
+let rec hasRGCs (stmts : stmt list) : bool =
+  let rec dbw (stmts : stmt list) : bool = match stmts with
+  | [] -> false
+  | h :: t -> match h.skind with
+    | Block(b)                    -> hasRGCs b.bstmts || dbw t
+    | Loop(b, loc, s1, s2)        -> hasRGs  b.bstmts || dbw t
+    | Switch(expr, b, stmts, loc) -> hasRGCs b.bstmts || dbw t
+    | Instr(is)                   -> dbw t
+    | If(expr, _then, _else, loc) -> hasRGCs _then.bstmts || hasRGCs _else.bstmts || dbw t
+    | Break(loc)                  -> dbw t
+    | Continue(loc)               -> true
+    | Return(expr,loc)            -> true
+    | Goto(stmtref, loc)          -> (match !stmtref with
+      | {labels = ls;} when (hasGoto ls false) -> true
+      | _ -> dbw t)
+    | TryFinally(b, b2, loc)        -> dump_stmt "TryFinally" h; raise TryStmtNotSupported; dbw t
+    | TryExcept(b, ilexpp, b2, loc) -> dump_stmt "TryExcept"  h; raise TryStmtNotSupported; dbw t  in
+    dbw stmts
+
+let rec hasUnsplittables (stmts : stmt list) : bool =
+  let rec dbw (stmts : stmt list) : bool = match stmts with
+  | [] -> false
+  | h :: t -> match h.skind with
+    | Block(b)                    -> hasUnsplittables b.bstmts || dbw t
+    | Loop(b, loc, s1, s2)        -> hasRGs b.bstmts  || dbw t
+    | Switch(expr, b, stmts, loc) -> hasRGCs b.bstmts || dbw t
+    | Instr(is)                   -> dbw t
+    | If(expr, _then, _else, loc) -> hasUnsplittables _then.bstmts || hasUnsplittables _else.bstmts || dbw t
+    | Break(loc)                  -> true
+    | Continue(loc)               -> true
+    | Return(expr,loc)            -> true
+    | Goto(stmtref, loc)          -> (match !stmtref with
+      | {labels = ls;} when (hasGoto ls false) -> true
+      | _ -> dbw t)
+    | TryFinally(b, b2, loc)        -> dump_stmt "TryFinally" h; raise TryStmtNotSupported; dbw t
+    | TryExcept(b, ilexpp, b2, loc) -> dump_stmt "TryExcept"  h; raise TryStmtNotSupported; dbw t  in
+    dbw stmts
+
+let hasUnsplittable (s : stmt) : bool = hasUnsplittables [s]
+

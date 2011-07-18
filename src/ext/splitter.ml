@@ -4,6 +4,8 @@ open Splitter_utils
 module C = Cil
 module RD = Reachingdefs
 
+exception TryStmtNotSupported
+
 let genNextCounter = function () ->
   let ni = ref 0 in
     function () -> ni := (!ni + 1); !ni
@@ -110,67 +112,74 @@ let gen_func_creator fd nexti =
            (callstmt, blockfunc)
      | _ -> raise Not_A_GFun_NEVER_GET_HERE))
 
+let stmt_text_len (s : stmt) : int =
+  String.length (Pretty.sprint 80 (printStmt defaultCilPrinter () s))
 
 let rec split_block width (body : block) (loc : location) func_creator =
+  let rec split_stmt s loc func_creator =
+    match s.skind with
+    | Block(b) -> 
+        let nb, nf = split_block width b loc func_creator in
+        let st = instr2stmt s (Block(nb)) in
+        st, nf
+    | Loop(b, loc, s1, s2) -> 
+      (* dump_stmt "Loop" h; *)
+      let new_body, nfuncs = split_block width b loc func_creator in
+      let st = instr2stmt s (Loop(new_body, loc, s1, s2)) in
+      st, nfuncs
+    | Switch(exp1, b, stmts, loc) ->
+        s, []
+    | Instr(is) ->
+      (* dump_stmt "Instr" h; *)
+        let nb, nf = split_block width { battrs = []; bstmts = [ (filter_case s) ] } loc func_creator in
+        let st = instr2stmt s (Block(nb)) in
+        st, nf
+    | If(expr, _then, _else, loc) ->
+      (* dump_stmt "If" h; *)
+      let tnew_body, tnfuncs = split_block width _then loc func_creator in
+      let enew_body, enfuncs = split_block width _else loc func_creator in
+      let st = instr2stmt s (If(expr, tnew_body, enew_body, loc)) in
+        st, (List.append tnfuncs enfuncs)
+    | Break(loc)    -> s, []
+    | Continue(loc) -> s, []
+    | Goto(a, b)    -> s, []
+    | Return(a, b)  -> s, []
+    | TryFinally(b, b2, loc) -> raise TryStmtNotSupported; s, []
+    | TryExcept(b, ilexpp, b2, loc) -> raise TryStmtNotSupported; s, [] in
+
   let rec bw (stmts : stmt list) (newstmts : stmt list) (oldstmts : stmt list) (left : int) (funcs : global list) =
+    let chunk_size = 300 in
     match stmts with 
     | [] -> 
        (match newstmts with
         | [] -> { battrs = body.battrs; bstmts = (List.rev oldstmts)}, (List.rev funcs)
         | _  -> let newcall, func = func_creator newstmts loc in 
                   { battrs = body.battrs; bstmts = (List.rev (newcall :: oldstmts))}, (List.rev ( func :: funcs)))
-    | h :: t when not (stmtHasReturn h) ->
+    | h :: t when not (hasUnsplittable h) ->
        (match left with
         | 0 -> 
           let newcall, func = func_creator newstmts loc in 
           bw (h :: t) [] (newcall :: oldstmts) width (func :: funcs)
-        | _ ->
-          bw t (h :: newstmts) oldstmts (left - 1) funcs)
+        | _ -> 
+          begin
+          if (stmt_text_len h) > chunk_size  then 
+            let newstmt , nfuncs = split_stmt h loc func_creator in
+            bw t [] (newstmt :: oldstmts) width (List.append nfuncs funcs)
+          else
+            bw t (h :: newstmts) oldstmts (left - 1) funcs
+          end)
     | h :: t -> 
+        let ns, nf = (if (stmt_text_len h) > chunk_size  then
+          split_stmt h loc func_creator
+        else
+          h, []) in 
        (match newstmts with
-        | [] -> bw t [] (h :: oldstmts) width funcs
+        | [] -> bw t [] (ns :: oldstmts) width (List.append nf funcs)
         | _  -> 
           let newcall, func = func_creator newstmts loc in 
-          bw t [] (h :: (newcall :: oldstmts)) width (func :: funcs)) in
+          bw t [] (ns :: (newcall :: oldstmts)) width (List.append nf (func :: funcs))) in
 
     bw body.bstmts [] [] width []
-
-let rec split_block2 fd body loc nexti =
-  (* split_block2 worker *)
-  let rec dbw (stmts : stmt list) (funcs : global list)  (nstmts : stmt list) = match stmts with
-  | [] -> ({ battrs = fd.sbody.battrs; bstmts = (List.rev nstmts)}, (List.rev funcs))
-  | h :: t -> match h.skind with
-  | Block(b) -> 
-      dump_stmt "Block" h;
-      let callstmt, func = block2callsite_and_func fd nexti loc h b in
-        dbw t (func :: funcs) (callstmt :: nstmts)
-  | Loop(b, loc, s1, s2) -> 
-      dump_stmt "Loop" h;
-      let new_body, nfuncs = split_block2 fd b loc nexti in
-      let st = instr2stmt h (Loop(new_body, loc, s1, s2)) in
-        dbw t (List.append nfuncs funcs) (st :: nstmts)
-  | Switch(exp1, b, stmts, loc) ->
-      dump_stmt "Switch" h;
-      let new_body, nfuncs = split_block2 fd b loc nexti in
-      let st = instr2stmt h (Switch(exp1, new_body, stmts, loc)) in
-        dbw t (List.append nfuncs funcs) (st :: nstmts)
-  | Instr(is) ->
-      dump_stmt "Instr" h ;
-      let callstmt, func = block2callsite_and_func fd nexti loc h { battrs = []; bstmts = [ (filter_case h) ] } in
-        dbw t (func :: funcs) (callstmt :: nstmts)
-  | If(expr, _then, _else, loc) ->
-      dump_stmt "If" h;
-      let tnew_body, tnfuncs = split_block2 fd _then loc nexti in
-      let enew_body, enfuncs = split_block2 fd _else loc nexti in
-      let st = instr2stmt h (If(expr, tnew_body, enew_body, loc)) in
-        dbw t (List.append (List.append tnfuncs enfuncs) funcs) (st :: nstmts)
-  | Break(loc)    -> dump_stmt "Break"    h; dbw t funcs (h :: nstmts)
-  | Continue(loc) -> dump_stmt "Continue" h; dbw t funcs (h :: nstmts)
-  | Goto(a, b)    -> dump_stmt "Goto"     h; dbw t funcs (h :: nstmts)
-  | Return(a, b)  -> dump_stmt "Return"   h; dbw t funcs (h :: nstmts)
-  | TryFinally(b, b2, loc) -> dump_stmt "TryFinally"    h; dbw t funcs (h :: nstmts)
-  | TryExcept(b, ilexpp, b2, loc) -> dump_stmt "TryExcept"    h; dbw t funcs (h :: nstmts) in
-    dbw body.bstmts [] []
 
 let dump_func_to_file funcN fileN =
   let channel = open_out fileN.fileName in
