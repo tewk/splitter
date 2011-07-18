@@ -102,6 +102,7 @@ CILLY_LIBRARY_MODULES = pretty inthash errormsg alpha trace stats util clist \
               cfg liveness reachingdefs deadcodeelim availexps \
               availexpslv predabst\
               testcil \
+	      splitter_utils\
 	      splitter \
 	      $(CILLY_FEATURES) \
 	      ciloptions feature_config

@@ -114,20 +114,24 @@ let gen_func_creator fd nexti =
 let rec split_block width (body : block) (loc : location) func_creator =
   let rec bw (stmts : stmt list) (newstmts : stmt list) (oldstmts : stmt list) (left : int) (funcs : global list) =
     match stmts with 
-    | [] -> ({ battrs = body.battrs; bstmts = (List.rev newstmts)}, (List.rev funcs)) 
+    | [] -> 
+       (match newstmts with
+        | [] -> { battrs = body.battrs; bstmts = (List.rev oldstmts)}, (List.rev funcs)
+        | _  -> let newcall, func = func_creator newstmts loc in 
+                  { battrs = body.battrs; bstmts = (List.rev (newcall :: oldstmts))}, (List.rev ( func :: funcs)))
     | h :: t when not (stmtHasReturn h) ->
-       ( match left with
+       (match left with
         | 0 -> 
           let newcall, func = func_creator newstmts loc in 
-            bw t (h :: (newcall :: oldstmts)) [] width (func :: funcs)
+          bw (h :: t) [] (newcall :: oldstmts) width (func :: funcs)
         | _ ->
           bw t (h :: newstmts) oldstmts (left - 1) funcs)
     | h :: t -> 
-        (match newstmts with
-        | [] -> bw t (h :: oldstmts) [] width funcs
-        | nb -> 
+       (match newstmts with
+        | [] -> bw t [] (h :: oldstmts) width funcs
+        | _  -> 
           let newcall, func = func_creator newstmts loc in 
-            bw t (h :: (newcall :: oldstmts)) [] width (func :: funcs)) in
+          bw t [] (h :: (newcall :: oldstmts)) width (func :: funcs)) in
 
     bw body.bstmts [] [] width []
 
@@ -231,7 +235,7 @@ let splitFuncsToTU file =
           (* Printf.fprintf stderr "^^^^^^^^^^^^^^ has BCorG  ^^^^^^^^^^^^^^\n";
            *)
           fd.sbody, [] 
-      | false -> (split_block 4 fd.sbody loc (gen_func_creator fd (genNextCounter ()))) in
+      | false -> (split_block 2 fd.sbody loc (gen_func_creator fd (genNextCounter ()))) in
         (* build new Cil.GFun for func *)
         let funcN = GFun({ 
           svar       = remove_static fd.svar;
