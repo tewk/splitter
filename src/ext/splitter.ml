@@ -54,7 +54,7 @@ let make_static v = {
 let buildGFun (fd : fundec) nexti (loc : location) (b : block) : global =
   let appendVarName v = {
     vname       = v.vname ^ "_" ^ (string_of_int (nexti ()));
-    vtype       = v.vtype;
+    vtype       = TFun(voidType,None,false,[]);
     vstorage    = Static;
     vglob       = v.vglob;
     vinline     = v.vinline;
@@ -159,6 +159,10 @@ let split_list l =
   slw l [] (isl / 2)
 (* func_creator : stmts list -> location -> (stmt, global)) *)
 
+let haslabel h = match h with
+  | { labels = [] } -> false
+  | _ -> true
+
 let rec split_block width (body : block) (loc : location) func_creator fd nexti =
   let rec split_stmt s loc func_creator =
     match s.skind with
@@ -202,11 +206,34 @@ let rec split_block width (body : block) (loc : location) func_creator fd nexti 
   let rec bw (stmts : stmt list) (newstmts : stmt list) (oldstmts : stmt list) (left : int) (funcs : global list) =
     let chunk_size = 200 in
     match stmts with 
+    (* base case, empty list  *)
     | [] -> 
        (match newstmts with
         | [] -> { battrs = body.battrs; bstmts = (List.rev oldstmts)}, (List.rev funcs)
-        | _  -> let newcall, func = func_creator newstmts loc in 
+        | _  -> let newcall, func = func_creator (List.rev newstmts) loc in 
                   { battrs = body.battrs; bstmts = (List.rev (newcall :: oldstmts))}, (List.rev ( func :: funcs)))
+
+    (* statement has label, make noop stmt with label *)
+    | h :: t when (haslabel h) -> 
+      let mknooplabel s = 
+         {labels = s.labels; 
+         skind = Instr [];
+         sid = 0; 
+         succs = []; 
+         preds = []},
+         {labels = []; 
+         skind = s.skind;
+         sid = 0; 
+         succs = []; 
+         preds = []} in
+      let noop, ns = mknooplabel h in
+      (match newstmts with
+      | [] -> bw t [ns] ( noop :: oldstmts) width funcs
+      | _  -> 
+       let newcall, func = func_creator (List.rev newstmts) loc in 
+       bw t [ns] (noop :: oldstmts) width (func :: funcs))
+
+
     (* current statement is splittable *)
     | h :: t when not (hasUnsplittable h) ->
        (match left with
@@ -226,6 +253,7 @@ let rec split_block width (body : block) (loc : location) func_creator fd nexti 
           else
             bw t (h :: newstmts) oldstmts (left - 1) funcs
           end)
+
     (* current statement is NOT splittable *)
     | h :: t -> 
         let ns, nf = (if (stmt_text_len h) > chunk_size  then
@@ -235,7 +263,7 @@ let rec split_block width (body : block) (loc : location) func_creator fd nexti 
        (match newstmts with
         | [] -> bw t [] (ns :: oldstmts) width (List.append nf funcs)
         | _  -> 
-          let newcall, func = func_creator newstmts loc in 
+          let newcall, func = func_creator (List.rev newstmts) loc in 
           bw t [] (ns :: (newcall :: oldstmts)) width (List.append nf (func :: funcs))) in
 
     bw body.bstmts [] [] width []
@@ -263,13 +291,9 @@ let splitFuncsToTU file =
   Cil.foldGlobals file (fun fns func -> match func with
     Cil.GFun(fd, loc) ->
       Printf.fprintf stderr "============== %s ==============\n" fd.svar.vname;
-      let new_body, funcs = match (hasGotos fd.sbody) with
-      | true -> 
-          fd.sbody, [] 
-      | false -> 
         let nexti = (genNextCounter ()) in 
         let fun_creator = (gen_func_creator fd nexti) in
-        (split_block 2 fd.sbody loc fun_creator fd nexti) in
+        let new_body, funcs = (split_block 2 fd.sbody loc fun_creator fd nexti) in
         (* build new Cil.GFun for func *)
         let funcN = GFun({ 
           svar       = remove_static fd.svar;
@@ -279,7 +303,7 @@ let splitFuncsToTU file =
           sbody      = new_body;
           smaxstmtid = fd.smaxstmtid;
           sallstmts  = fd.sallstmts; }, loc)
-        and varinfos2GVarDecls vs = List.map (fun x -> GVarDecl(x, loc)) vs in
+        and varinfos2GVarDecls vs = List.map (fun x -> GVarDecl((make_static x), loc)) vs in
         (* build new Cil.file for func *)
           let fileN = { fileName = file.fileName ^ "_" ^ fd.C.svar.C.vname ^ ".c";
                         globals = (List.append (List.append (List.append (List.append
