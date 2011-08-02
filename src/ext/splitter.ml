@@ -5,6 +5,8 @@ module C = Cil
 module RD = Reachingdefs
 
 exception TryStmtNotSupported
+exception AEXN
+exception BEXN
 
 (* () -> () -> int *)
 (* create a incrementing counter function *)
@@ -20,9 +22,31 @@ let make_make_file lst =
   | h :: t -> (fprintf o "%s\n" h); w o t in
     w stderr lst
 
+let prepend_type_ t = match t with
+  | TFun (tt, Some ats, b, attrs) ->
+    let rec ptw ats nats =
+      (match ats with
+      | [] -> List.rev nats
+      | (s, ty, at) :: tl -> ptw tl (( "_UnIqUe_" ^ s, ty, at) :: nats)) in
+    let xnats = ptw ats [] in
+    TFun(tt, Some xnats, b, attrs)
+  | TFun(tt, None, b, attrs) -> t
+  | TFun(a, b, c, d) ->       Printf.fprintf stderr "***Oops1 ***"; raise AEXN
+  | TInt(a,b) ->              Printf.fprintf stderr "***Oops3 ***"; raise AEXN
+  | TFloat(a,b) ->            Printf.fprintf stderr "***Oops4 ***"; raise AEXN
+  | TPtr(a,b) ->              Printf.fprintf stderr "***Oops5 ***"; raise AEXN
+  | TArray(a,b,c) ->          Printf.fprintf stderr "***Oops6 ***"; raise AEXN
+  | TVoid(a) ->               Printf.fprintf stderr "***Oops7 ***"; raise AEXN
+  | TNamed(a,b) ->            Printf.fprintf stderr "***Oops8 ***"; raise AEXN
+  | TComp(a,b) ->             Printf.fprintf stderr "***Oops9 ***"; raise AEXN
+  | TEnum(a,b) ->             Printf.fprintf stderr "***Oops10***"; raise AEXN
+  | TBuiltin_va_list(a) ->    Printf.fprintf stderr "***Oops11***"; raise AEXN
+  | _ -> raise BEXN
+
+
 let remove_static v = {
   vname       = v.vname;
-  vtype       = v.vtype;
+  vtype       = prepend_type_ v.vtype;
   vstorage    = (match v.vstorage with
                   | Static ->   NoStorage
                   | _ -> v.vstorage);
@@ -40,6 +64,20 @@ let make_static v = {
   vname       = v.vname;
   vtype       = v.vtype;
   vstorage    = Static;
+  vglob       = v.vglob;
+  vinline     = v.vinline;
+  vattr       = v.vattr;
+  vdecl       = v.vdecl;
+  vid         = v.vid;
+  vaddrof     = v.vaddrof;
+  vreferenced = v.vreferenced;
+  vdescr      = v.vdescr;
+  vdescrpure  = v.vdescrpure;}
+
+let prepend_ v = {
+  vname       = "_UnIqUe_" ^ v.vname;
+  vtype       = v.vtype;
+  vstorage    = v.vstorage;
   vglob       = v.vglob;
   vinline     = v.vinline;
   vattr       = v.vattr;
@@ -204,6 +242,7 @@ let rec split_block width (body : block) (loc : location) func_creator fd nexti 
 
   (* block-worker (bw) *)
   let rec bw (stmts : stmt list) (newstmts : stmt list) (oldstmts : stmt list) (left : int) (funcs : global list) =
+(*    (List.iter (dump_stmt "LL") stmts); *)
     let chunk_size = 200 in
     match stmts with 
     (* base case, empty list  *)
@@ -215,6 +254,8 @@ let rec split_block width (body : block) (loc : location) func_creator fd nexti 
 
     (* statement has label, make noop stmt with label *)
     | h :: t when (haslabel h) -> 
+   (*   dump_stmt "hasLabel" h; *)
+
       let mknooplabel s = 
          {labels = s.labels; 
          skind = Instr [];
@@ -231,11 +272,12 @@ let rec split_block width (body : block) (loc : location) func_creator fd nexti 
       | [] -> bw t [ns] ( noop :: oldstmts) width funcs
       | _  -> 
        let newcall, func = func_creator (List.rev newstmts) loc in 
-       bw t [ns] (noop :: oldstmts) width (func :: funcs))
+       bw t [ns] (noop :: (newcall :: oldstmts)) width (func :: funcs))
 
 
     (* current statement is splittable *)
     | h :: t when not (hasUnsplittable h) ->
+(*      dump_stmt "splittable" h; *)
        (match left with
         | 0 -> 
           let newcall, func = func_creator (List.rev newstmts) loc in 
@@ -249,13 +291,14 @@ let rec split_block width (body : block) (loc : location) func_creator fd nexti 
               bw t (h :: newstmts) oldstmts (left - 1) funcs
             | _ -> 
               let newstmt , nfuncs = split_stmt h loc func_creator in
-              bw t [] (newstmt :: oldstmts) width (List.append nfuncs funcs))
+              bw t (newstmt :: newstmts) oldstmts width (List.append nfuncs funcs))
           else
             bw t (h :: newstmts) oldstmts (left - 1) funcs
           end)
 
     (* current statement is NOT splittable *)
     | h :: t -> 
+(*      dump_stmt "unsplittable" h; *)
         let ns, nf = (if (stmt_text_len h) > chunk_size  then
           split_stmt h loc func_creator
         else
@@ -278,6 +321,13 @@ let dump_func_to_file funcN fileN =
     close_out channel;
     fileN.fileName
 
+let make_formal_assigns fs =
+  let rec mkfa fs nfs = match fs with
+  | [] -> Instr (List.rev nfs)
+  | h :: t ->
+    let nh = Set(((Var(h)), NoOffset), (Lval((Var(prepend_ h)), NoOffset)), h.vdecl) in
+    mkfa t (nh :: nfs) in
+  mkfa fs []
 
 (* Split functions into their own translation units *)
 let splitFuncsToTU file =
@@ -294,13 +344,14 @@ let splitFuncsToTU file =
         let nexti = (genNextCounter ()) in 
         let fun_creator = (gen_func_creator fd nexti) in
         let new_body, funcs = (split_block 2 fd.sbody loc fun_creator fd nexti) in
+        let formals_assigns = (instr2stmt2 [] (make_formal_assigns fd.sformals)) in
         (* build new Cil.GFun for func *)
         let funcN = GFun({ 
           svar       = remove_static fd.svar;
           sformals   = [];
           slocals    = [];
           smaxid     = fd.smaxid;
-          sbody      = new_body;
+          sbody      = {battrs = new_body.battrs; bstmts = ( formals_assigns :: new_body.bstmts)};
           smaxstmtid = fd.smaxstmtid;
           sallstmts  = fd.sallstmts; }, loc)
         and varinfos2GVarDecls vs = List.map (fun x -> GVarDecl((make_static x), loc)) vs in
