@@ -100,13 +100,13 @@ let filter_case s = {
   succs  = s.succs; 
   preds  = s.preds}
 
-(* generates a callstmt and function definition from a block node *)
 
 let dump_stmt d s =
   Printf.fprintf stderr "*** %s *** " d;
   (dumpStmt defaultCilPrinter stderr 2 s);
   Printf.fprintf stderr "\n"
 
+(* generates a callstmt and function definition from a stmt list *)
 let gen_func_creator fd nexti =
   (fun stmts loc ->
     let blockfunc = (buildGFun fd nexti loc {battrs = fd.sbody.battrs; bstmts = stmts} ) in
@@ -117,12 +117,12 @@ let gen_func_creator fd nexti =
      | _ -> raise Not_A_GFun_NEVER_GET_HERE))
 
 let stmt_text_len (s : stmt) : int =
-(*
-*)
   let len = String.length (Pretty.sprint 80 (printStmt defaultCilPrinter () s)) in 
+(*
   Printf.fprintf stderr "&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&& %i\n" len;
   Printf.fprintf stderr "%s" (Pretty.sprint 80 (printStmt defaultCilPrinter () s));
   Printf.fprintf stderr "$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$ %i\n" len;
+*)
   len
 
 let move_condition_to_func expr loc fd nexti =  
@@ -174,11 +174,13 @@ let rec split_block width (body : block) (loc : location) func_creator fd nexti 
     | Switch(exp1, b, stmts, loc) ->
         s, []
     | Instr(is) ->
-      (* dump_stmt "Instr" h; *)
-        let stblk = { battrs = []; bstmts = [ (filter_case s) ] } in
-        let nb, nf = split_block width stblk loc func_creator fd nexti in
-        let st = instr2stmt s (Block(nb)) in
-        st, nf
+        let l1, l2 = split_list is in
+        let c1, f1 = func_creator [ (instr2stmt s (Instr(l1))) ] loc in
+        let c2, f2 = func_creator [ (instr2stmt s (Instr(l2))) ] loc in
+        let nb = {battrs = []; bstmts = [c1; c2]} in
+        let nst = instr2stmt s (Block(nb)) in
+        let nfuncs = [f1; f2] in
+        nst, nfuncs
     | If(expr, _then, _else, loc) ->
       (* dump_stmt "If" h; *)
       let tnew_body, tnfuncs = split_block width _then loc func_creator fd nexti in
@@ -219,20 +221,6 @@ let rec split_block width (body : block) (loc : location) func_creator fd nexti 
             | Instr(is) when ((List.length is) == 1) ->
               bw t (h :: newstmts) oldstmts (left - 1) funcs
             | _ -> 
-              dump_stmt "Ohh" h;
-              (match h.skind with
-                | Switch(a,b,c,d)      -> dump_stmt "Switch" h
-                | Instr(b)             -> dump_stmt "Instr" h
-                | Block(b)             -> dump_stmt "Block" h
-                | Loop(a,b,c,d)        -> dump_stmt "Loop" h
-                | If(a, b, c, d)       -> dump_stmt "If" h
-                | Break(b)             -> dump_stmt "Break" h
-                | Continue(b)          -> dump_stmt "Continue" h
-                | Goto(a,b)            -> dump_stmt "Goto" h
-                | Return(a,b)          -> dump_stmt "Return" h
-                | TryFinally(a, b, c)  -> dump_stmt "TryFinally" h
-                | TryExcept(a, b, c,d) -> dump_stmt "TryExcept" h);
-
               let newstmt , nfuncs = split_stmt h loc func_creator in
               bw t [] (newstmt :: oldstmts) width (List.append nfuncs funcs))
           else
@@ -255,54 +243,19 @@ let rec split_block width (body : block) (loc : location) func_creator fd nexti 
 let dump_func_to_file funcN fileN =
   let channel = open_out fileN.fileName in
     (* remove unuseds except for root funcN which may be static *)
+(*
     Rmtmps.removeUnusedTemps ~isRoot:(fun x -> (Rmtmps.isExportedRoot x) || x == funcN) fileN;
+*)
     dumpFile defaultCilPrinter channel fileN.fileName fileN;
     close_out channel;
     fileN.fileName
 
 
-(*
-class hasInputGoto file = object (self)
-  inherit nopCilVisitor
-  
-  val bool mutable present;
-
-  method vstmt s = match s with | Goto(sr, loc) -> match !ref with
-    {labels = ls;} when (List.fold (function a x -> a || match x with | Label(_,_,b) -> b) false ls)
-    present := true;
-    
-  | _ -> DoChildren
-end
-*)
-let rec hasGoto lst f =
-  match lst with
-    | [] -> f
-    | h :: t -> 
-      match h with 
-        | Label(_,_,true) -> true
-        | _ -> hasGoto t f
-
-let rec hasBCorG (bodyb : block) : bool =
-  let rec dbw (stmts : stmt list) : bool = match stmts with
-  | [] -> false
-  | h :: t -> match h.skind with
-    | Block(b)                    -> hasBCorG b || dbw t
-    | Loop(b, loc, s1, s2)        -> hasBCorG b || dbw t
-    | Switch(expr, b, stmts, loc) -> hasBCorG b || dbw t
-    | Instr(is)                   -> dbw t
-    | If(expr, _then, _else, loc) -> hasBCorG _then || hasBCorG _else|| dbw t
-    | Break(loc)                  -> true
-    | Continue(loc)               -> true
-    | Return(expr,loc)            -> dbw t
-    | Goto(stmtref, loc)          -> (match !stmtref with
-      | {labels = ls;} when (hasGoto ls false) -> true
-      | _ -> dbw t)
-    | TryFinally(b, b2, loc)        -> dump_stmt "Other"  h; dbw t
-    | TryExcept(b, ilexpp, b2, loc) -> dump_stmt "Other"  h; dbw t  in
-    dbw bodyb.bstmts
-
 (* Split functions into their own translation units *)
 let splitFuncsToTU file =
+  let channel = open_out "CILOUT.DUMP" in
+    dumpFile defaultCilPrinter channel "CILOUT.DUMP" file;
+    close_out channel;
   let otherGlobals = List.filter (fun x -> match x with
       Cil.GFun(fd ,_) -> false
       | a -> true) 
