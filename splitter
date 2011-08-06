@@ -1,6 +1,7 @@
 #!/usr/bin/env perl
 `rm k/*`;
 my $arg = $ARGV[0] || "sqlite3.c" || "rijndael_orig.c";
-`bin/cilly --save-temps=k --dosplitter --noPrintLn $arg`;
+`bin/cilly --save-temps=k --dosplitter --noPrintLn --splitrmtmps $arg`;
+#`bin/cilly --save-temps=k --dosplitter --noPrintLn $arg`;
 print "$ARGV[0]\n";
 print "$arg\n";

@@ -348,6 +348,17 @@ let options : (string * Arg.spec * string) list =
     Arg.Clear Cil.print_CIL_Input,
     " Don't print CIL specific-features like __blockattribute__";
 
+    "--splitwidth",
+    Arg.Int (fun n -> Splitter.splitwidth := n),
+    " set splitwidth";
+
+    "--splitsize",
+    Arg.Int (fun n -> Splitter.splitsize := n),
+    " set splitsize";
+
+    "--splitrmtmps",
+    Arg.Set Splitter.splitrmtmps,
+    " set splitrmtmps";
     (* Don't just add new flags at the end ... place options
        in the correct category *)
   ]

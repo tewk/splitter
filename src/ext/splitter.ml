@@ -4,6 +4,11 @@ open Splitter_utils
 module C = Cil
 module RD = Reachingdefs
 
+(* command-line options *)
+let splitwidth = ref 4
+let splitsize = ref 300
+let splitrmtmps = ref false;
+
 exception TryStmtNotSupported
 exception AEXN
 exception BEXN
@@ -209,12 +214,14 @@ let rec split_block width (body : block) (loc : location) func_creator fd nexti 
         let st = instr2stmt s (Block(nb)) in
         st, nf
     | Loop(b, loc, s1, s2) -> 
-      (* dump_stmt "Loop" h; *)
-      let new_body, nfuncs = split_block width b loc func_creator fd nexti in
-      let st = instr2stmt s (Loop(new_body, loc, s1, s2)) in
-      st, nfuncs
+        (* dump_stmt "Loop" h; *)
+        let nb, nf = split_block width b loc func_creator fd nexti in
+        let st = instr2stmt s (Loop(nb, loc, s1, s2)) in
+        st, nf
     | Switch(exp1, b, stmts, loc) ->
-        s, []
+        let nb, nf = split_block width b loc func_creator fd nexti in
+        let st = instr2stmt s (Switch(exp1, nb, stmts, loc)) in
+        st, nf
     | Instr(is) ->
         let l1, l2 = split_list is in
         let c1, f1 = func_creator [ (instr2stmt s (Instr(l1))) ] loc in
@@ -243,7 +250,7 @@ let rec split_block width (body : block) (loc : location) func_creator fd nexti 
   (* block-worker (bw) *)
   let rec bw (stmts : stmt list) (newstmts : stmt list) (oldstmts : stmt list) (left : int) (funcs : global list) =
 (*    (List.iter (dump_stmt "LL") stmts); *)
-    let chunk_size = 200 in
+    let chunk_size = !splitsize in
     match stmts with 
     (* base case, empty list  *)
     | [] -> 
@@ -254,7 +261,7 @@ let rec split_block width (body : block) (loc : location) func_creator fd nexti 
 
     (* statement has label, make noop stmt with label *)
     | h :: t when (haslabel h) -> 
-   (*   dump_stmt "hasLabel" h; *)
+(*      dump_stmt "hasLabel" h;  *)
 
       let mknooplabel s = 
          {labels = s.labels; 
@@ -268,6 +275,10 @@ let rec split_block width (body : block) (loc : location) func_creator fd nexti 
          succs = []; 
          preds = []} in
       let noop, ns = mknooplabel h in
+(*
+      dump_stmt "hL2" noop;
+      dump_stmt "hL3" ns;
+*)
       (match newstmts with
       | [] -> bw t [ns] ( noop :: oldstmts) width funcs
       | _  -> 
@@ -315,8 +326,9 @@ let dump_func_to_file funcN fileN =
   let channel = open_out fileN.fileName in
     (* remove unuseds except for root funcN which may be static *)
 (*
-    Rmtmps.removeUnusedTemps ~isRoot:(fun x -> (Rmtmps.isExportedRoot x) || x == funcN) fileN;
 *)
+    if !splitrmtmps then 
+      Rmtmps.removeUnusedTemps ~isRoot:(fun x -> (Rmtmps.isExportedRoot x) || x == funcN) fileN;
     dumpFile defaultCilPrinter channel fileN.fileName fileN;
     close_out channel;
     fileN.fileName
@@ -329,10 +341,11 @@ let make_formal_assigns fs =
     mkfa t (nh :: nfs) in
   mkfa fs []
 
+
 (* Split functions into their own translation units *)
 let splitFuncsToTU file =
-  let channel = open_out "CILOUT.DUMP" in
-    dumpFile defaultCilPrinter channel "CILOUT.DUMP" file;
+  let channel = open_out (file.fileName ^ "_CILOUT.DUMP") in
+    dumpFile defaultCilPrinter channel (file.fileName ^ "_CILOUT.DUMP") file;
     close_out channel;
   let otherGlobals = List.filter (fun x -> match x with
       Cil.GFun(fd ,_) -> false
@@ -340,10 +353,15 @@ let splitFuncsToTU file =
     file.globals in 
   Cil.foldGlobals file (fun fns func -> match func with
     Cil.GFun(fd, loc) ->
+      let fileOld = { fileName = file.fileName ^ "_" ^ fd.C.svar.C.vname ^ ".c.orig";
+                    globals = (List.append otherGlobals [func]);
+                    globinit = None; 
+                    globinitcalled = false; } in
+        dump_func_to_file func fileOld ;
       Printf.fprintf stderr "============== %s ==============\n" fd.svar.vname;
         let nexti = (genNextCounter ()) in 
         let fun_creator = (gen_func_creator fd nexti) in
-        let new_body, funcs = (split_block 2 fd.sbody loc fun_creator fd nexti) in
+        let new_body, funcs = (split_block !splitwidth fd.sbody loc fun_creator fd nexti) in
         let formals_assigns = (instr2stmt2 [] (make_formal_assigns fd.sformals)) in
         (* build new Cil.GFun for func *)
         let funcN = GFun({ 
@@ -391,7 +409,7 @@ let dosplitter file =
 let feature : featureDescr =
   { fd_name = "splitter";
     fd_enabled = Cilutil.logWrites;
-    fd_description = "Split function CFGs";
+    fd_description = "Split functions";
     fd_extraopt = [];
     fd_doit = dosplitter;
     fd_post_check = true;

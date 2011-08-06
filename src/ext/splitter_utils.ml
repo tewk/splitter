@@ -11,6 +11,22 @@ let rec hasGoto lst f =
       match h with
         | Label(_,_,true) -> true
         | _ -> hasGoto t f
+let hasPrefix s p =
+  let pl = String.length p in
+  let sl = String.length s in
+  if ((sl >= pl) && (String.compare p (String.sub s 0 pl)) == 0) then true
+  else true
+
+let hasLabel s =
+  let rec hasRealLabel lst f =
+    match lst with
+      | [] -> f
+      | h :: t ->
+        match h with
+          | Label(name,_,true) -> not (hasPrefix name "_cont")
+          | Label(name,_,_) -> not (hasPrefix name "case ")
+          | _ -> hasRealLabel t f in
+  hasRealLabel s.labels false
 
 let dump_stmt d s =
   Printf.fprintf stderr "*** %s *** " d;
@@ -31,7 +47,7 @@ let rec hasGotos (bodyb : block) : bool =
     | Return(expr,loc)            -> dbw t
     | Goto(stmtref, loc)          -> (match !stmtref with
       | {labels = ls;} when (hasGoto ls false) -> true
-      | _ -> dbw t)
+      | _ -> true (*dbw t*))
     | TryFinally(b, b2, loc)        -> dump_stmt "TryFinally" h; raise TryStmtNotSupported; dbw t
     | TryExcept(b, ilexpp, b2, loc) -> dump_stmt "TryExcept"  h; raise TryStmtNotSupported; dbw t  in
     dbw bodyb.bstmts
@@ -126,7 +142,9 @@ let rec countReturns (bodyb : block) : int =
 let rec hasRGs (stmts : stmt list ) : bool =
   let rec dbw (stmts : stmt list) : bool = match stmts with
   | [] -> false
-  | h :: t -> match h.skind with
+  | h :: t ->
+      (hasLabel h) ||
+      match h.skind with
     | Block(b)                    -> hasRGs b.bstmts || dbw t
     | Loop(b, loc, s1, s2)        -> hasRGs b.bstmts || dbw t
     | Switch(expr, b, stmts, loc) -> hasRGs b.bstmts || dbw t
@@ -137,7 +155,7 @@ let rec hasRGs (stmts : stmt list ) : bool =
     | Return(expr,loc)            -> true
     | Goto(stmtref, loc)          -> (match !stmtref with
       | {labels = ls;} when (hasGoto ls false) -> true
-      | _ -> dbw t)
+      | _ -> true (*dbw t*))
     | TryFinally(b, b2, loc)        -> dump_stmt "TryFinally" h; raise TryStmtNotSupported; dbw t
     | TryExcept(b, ilexpp, b2, loc) -> dump_stmt "TryExcept"  h; raise TryStmtNotSupported; dbw t  in
     dbw stmts
@@ -145,7 +163,9 @@ let rec hasRGs (stmts : stmt list ) : bool =
 let rec hasRGCs (stmts : stmt list) : bool =
   let rec dbw (stmts : stmt list) : bool = match stmts with
   | [] -> false
-  | h :: t -> match h.skind with
+  | h :: t ->
+      (hasLabel h) ||
+      match h.skind with
     | Block(b)                    -> hasRGCs b.bstmts || dbw t
     | Loop(b, loc, s1, s2)        -> hasRGs  b.bstmts || dbw t
     | Switch(expr, b, stmts, loc) -> hasRGCs b.bstmts || dbw t
@@ -156,7 +176,7 @@ let rec hasRGCs (stmts : stmt list) : bool =
     | Return(expr,loc)            -> true
     | Goto(stmtref, loc)          -> (match !stmtref with
       | {labels = ls;} when (hasGoto ls false) -> true
-      | _ -> dbw t)
+      | _ -> true (*dbw t*))
     | TryFinally(b, b2, loc)        -> dump_stmt "TryFinally" h; raise TryStmtNotSupported; dbw t
     | TryExcept(b, ilexpp, b2, loc) -> dump_stmt "TryExcept"  h; raise TryStmtNotSupported; dbw t  in
     dbw stmts
@@ -164,7 +184,9 @@ let rec hasRGCs (stmts : stmt list) : bool =
 let rec hasUnsplittables (stmts : stmt list) : bool =
   let rec dbw (stmts : stmt list) : bool = match stmts with
   | [] -> false
-  | h :: t -> match h.skind with
+  | h :: t -> 
+      (hasLabel h) ||
+      match h.skind with
     | Block(b)                    -> hasUnsplittables b.bstmts || dbw t
     | Loop(b, loc, s1, s2)        -> hasRGs b.bstmts  || dbw t
     | Switch(expr, b, stmts, loc) -> hasRGCs b.bstmts || dbw t
@@ -175,7 +197,7 @@ let rec hasUnsplittables (stmts : stmt list) : bool =
     | Return(expr,loc)            -> true
     | Goto(stmtref, loc)          -> (match !stmtref with
       | {labels = ls;} when (hasGoto ls false) -> true
-      | _ -> dbw t)
+      | _ -> true (*dbw t*))
     | TryFinally(b, b2, loc)        -> dump_stmt "TryFinally" h; raise TryStmtNotSupported; dbw t
     | TryExcept(b, ilexpp, b2, loc) -> dump_stmt "TryExcept"  h; raise TryStmtNotSupported; dbw t  in
     dbw stmts
