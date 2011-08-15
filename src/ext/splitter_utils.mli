@@ -20,3 +20,7 @@ val stmtHasReturn: stmt -> bool
 val countReturns: block -> int
 
 val hasUnsplittable: stmt -> bool
+
+val find_labels: stmt list -> stmt list -> stmt list
+
+val fixup_labels: stmt list -> stmt list -> stmt list

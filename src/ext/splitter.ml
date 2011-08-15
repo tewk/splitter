@@ -5,8 +5,8 @@ module C = Cil
 module RD = Reachingdefs
 
 (* command-line options *)
-let splitwidth = ref 4
-let splitsize = ref 300
+let splitwidth  = ref 4
+let splitsize   = ref 300
 let splitrmtmps = ref false;
 
 exception TryStmtNotSupported
@@ -49,74 +49,28 @@ let prepend_type_ t = match t with
   | _ -> raise BEXN
 
 
-let remove_static v = {
-  vname       = v.vname;
-  vtype       = prepend_type_ v.vtype;
+let remove_static v = { v with
   vstorage    = (match v.vstorage with
                   | Static ->   NoStorage
-                  | _ -> v.vstorage);
-  vglob       = v.vglob;
-  vinline     = v.vinline;
-  vattr       = v.vattr;
-  vdecl       = v.vdecl;
-  vid         = v.vid;
-  vaddrof     = v.vaddrof;
-  vreferenced = v.vreferenced;
-  vdescr      = v.vdescr;
-  vdescrpure  = v.vdescrpure;}
+                  | _ -> v.vstorage); }
 
-let make_static v = {
-  vname       = v.vname;
-  vtype       = v.vtype;
-  vstorage    = Static;
-  vglob       = v.vglob;
-  vinline     = v.vinline;
-  vattr       = v.vattr;
-  vdecl       = v.vdecl;
-  vid         = v.vid;
-  vaddrof     = v.vaddrof;
-  vreferenced = v.vreferenced;
-  vdescr      = v.vdescr;
-  vdescrpure  = v.vdescrpure;}
+let make_static v = { v with vstorage = Static;}
 
-let prepend_ v = {
-  vname       = "_UnIqUe_" ^ v.vname;
-  vtype       = v.vtype;
-  vstorage    = v.vstorage;
-  vglob       = v.vglob;
-  vinline     = v.vinline;
-  vattr       = v.vattr;
-  vdecl       = v.vdecl;
-  vid         = v.vid;
-  vaddrof     = v.vaddrof;
-  vreferenced = v.vreferenced;
-  vdescr      = v.vdescr;
-  vdescrpure  = v.vdescrpure;}
+let prepend_ v = { v with vname = "_UnIqUe_" ^ v.vname; }
 
 (* build a GFun from a fundec, i generator, loc, and block *)
 let buildGFun (fd : fundec) nexti (loc : location) (b : block) : global =
-  let appendVarName v = {
+  let appendVarName v = { v with
     vname       = v.vname ^ "_" ^ (string_of_int (nexti ()));
     vtype       = TFun(voidType,None,false,[]);
-    vstorage    = Static;
-    vglob       = v.vglob;
-    vinline     = v.vinline;
-    vattr       = v.vattr;
-    vdecl       = v.vdecl;
-    vid         = v.vid;
-    vaddrof     = v.vaddrof;
-    vreferenced = v.vreferenced;
-    vdescr      = v.vdescr;
-    vdescrpure  = v.vdescrpure;} in
+    vstorage    = Static; } in
   
-  GFun({ 
+  GFun({ fd with
         svar       = appendVarName fd.svar;
         sformals   = [];
         slocals    = [];
-        smaxid     = fd.smaxid;
         sbody      = b;
-        smaxstmtid = fd.smaxstmtid;
-        sallstmts  = fd.sallstmts; }, loc)
+        }, loc)
 
 exception Not_A_GFun_NEVER_GET_HERE
 
@@ -134,15 +88,10 @@ let func2call_stmt fnvar labels loc =
   succs = []; 
   preds = []}
 
-let filter_case s = {
+let filter_case s = { s with
   labels = List.filter (function x -> match x with 
                           | Case(e, l) -> false 
-                          | _ -> true) s.labels;
-  skind  = s.skind; 
-  sid    = s.sid;
-  succs  = s.succs; 
-  preds  = s.preds}
-
+                          | _ -> true) s.labels; }
 
 let dump_stmt d s =
   Printf.fprintf stderr "*** %s *** " d;
@@ -275,10 +224,6 @@ let rec split_block width (body : block) (loc : location) func_creator fd nexti 
          succs = []; 
          preds = []} in
       let noop, ns = mknooplabel h in
-(*
-      dump_stmt "hL2" noop;
-      dump_stmt "hL3" ns;
-*)
       (match newstmts with
       | [] -> bw t [ns] ( noop :: oldstmts) width funcs
       | _  -> 
@@ -325,8 +270,6 @@ let rec split_block width (body : block) (loc : location) func_creator fd nexti 
 let dump_func_to_file funcN fileN =
   let channel = open_out fileN.fileName in
     (* remove unuseds except for root funcN which may be static *)
-(*
-*)
     if !splitrmtmps then 
       Rmtmps.removeUnusedTemps ~isRoot:(fun x -> (Rmtmps.isExportedRoot x) || x == funcN) fileN;
     dumpFile defaultCilPrinter channel fileN.fileName fileN;
@@ -359,32 +302,34 @@ let splitFuncsToTU file =
                     globinitcalled = false; } in
         dump_func_to_file func fileOld ;
       Printf.fprintf stderr "============== %s ==============\n" fd.svar.vname;
-        let nexti = (genNextCounter ()) in 
-        let fun_creator = (gen_func_creator fd nexti) in
-        let new_body, funcs = (split_block !splitwidth fd.sbody loc fun_creator fd nexti) in
-        let formals_assigns = (instr2stmt2 [] (make_formal_assigns fd.sformals)) in
-        (* build new Cil.GFun for func *)
-        let funcN = GFun({ 
-          svar       = remove_static fd.svar;
-          sformals   = [];
-          slocals    = [];
-          smaxid     = fd.smaxid;
-          sbody      = {battrs = new_body.battrs; bstmts = ( formals_assigns :: new_body.bstmts)};
-          smaxstmtid = fd.smaxstmtid;
-          sallstmts  = fd.sallstmts; }, loc)
-        and varinfos2GVarDecls vs = List.map (fun x -> GVarDecl((make_static x), loc)) vs in
-        (* build new Cil.file for func *)
-          let fileN = { fileName = file.fileName ^ "_" ^ fd.C.svar.C.vname ^ ".c";
-                        globals = (List.append (List.append (List.append (List.append
-                          otherGlobals 
-                          (varinfos2GVarDecls fd.sformals)) 
-                          (varinfos2GVarDecls fd.slocals)) 
-                          (List.rev funcs))
-                          [funcN]);
-                        globinit = None; 
-                        globinitcalled = false; } in
-            dump_func_to_file funcN fileN ;
-            fileN.fileName :: fns
+      let nexti = (genNextCounter ()) in 
+      let fun_creator = (gen_func_creator fd nexti) in
+      let new_body, funcs = (split_block !splitwidth fd.sbody loc fun_creator fd nexti) in
+      let formals_assigns = (instr2stmt2 [] (make_formal_assigns fd.sformals)) in
+      let labels = find_labels new_body.bstmts [] in
+      fixup_labels new_body.bstmts labels;
+      (* build new Cil.GFun for func *)
+      let funcN = GFun({ 
+        svar       = remove_static fd.svar;
+        sformals   = [];
+        slocals    = [];
+        smaxid     = fd.smaxid;
+        sbody      = {battrs = new_body.battrs; bstmts = ( formals_assigns :: new_body.bstmts)};
+        smaxstmtid = fd.smaxstmtid;
+        sallstmts  = fd.sallstmts; }, loc)
+      and varinfos2GVarDecls vs = List.map (fun x -> GVarDecl((make_static x), loc)) vs in
+      (* build new Cil.file for func *)
+        let fileN = { fileName = file.fileName ^ "_" ^ fd.C.svar.C.vname ^ ".c";
+                      globals = (List.append (List.append (List.append (List.append
+                        otherGlobals 
+                        (varinfos2GVarDecls fd.sformals)) 
+                        (varinfos2GVarDecls fd.slocals)) 
+                        (List.rev funcs))
+                        [funcN]);
+                      globinit = None; 
+                      globinitcalled = false; } in
+          dump_func_to_file funcN fileN ;
+          fileN.fileName :: fns
     | _ -> fns) []
 
 

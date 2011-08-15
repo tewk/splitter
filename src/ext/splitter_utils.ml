@@ -3,6 +3,8 @@ open Cil
 (* split block until break, continue; *)
 (* split case statements out *)
 exception TryStmtNotSupported
+exception LabelNotFound
+exception FirstLabelDoesntMatch
 
 let rec hasGoto lst f =
   match lst with
@@ -15,18 +17,18 @@ let hasPrefix s p =
   let pl = String.length p in
   let sl = String.length s in
   if ((sl >= pl) && (String.compare p (String.sub s 0 pl)) == 0) then true
-  else true
+  else false
 
 let hasLabel s =
-  let rec hasRealLabel lst f =
+  let rec hasRealLabel lst =
     match lst with
-      | [] -> f
+      | [] -> false
       | h :: t ->
         match h with
           | Label(name,_,true) -> not (hasPrefix name "_cont")
           | Label(name,_,_) -> not (hasPrefix name "case ")
-          | _ -> hasRealLabel t f in
-  hasRealLabel s.labels false
+          | _ -> hasRealLabel t in
+  hasRealLabel s.labels
 
 let dump_stmt d s =
   Printf.fprintf stderr "*** %s *** " d;
@@ -204,3 +206,57 @@ let rec hasUnsplittables (stmts : stmt list) : bool =
 
 let hasUnsplittable (s : stmt) : bool = hasUnsplittables [s]
 
+let rec find_labels (stmts : stmt list) (lbls: stmt list) : stmt list =
+  let labeled_stmt_lst s =
+    match s.labels with
+    | [] -> []
+    | _  -> [ s ]  in
+  let rec dbw (stmts : stmt list) (lbls: stmt list) : stmt list = match stmts with
+  | [] -> lbls
+  | h :: t -> 
+      let hl = (labeled_stmt_lst h) in 
+      match h.skind with
+    | Block(b)                    -> dbw t (List.append (find_labels b.bstmts hl) lbls)
+    | Loop(b, loc, s1, s2)        -> dbw t (List.append (find_labels b.bstmts hl) lbls)
+    | Switch(expr, b, stmts, loc) -> dbw t (List.append (find_labels b.bstmts hl) lbls) 
+    | Instr(is)                   -> dbw t (List.append hl lbls)
+    | If(expr, _then, _else, loc) -> dbw t (List.append (List.append (find_labels _then.bstmts hl) (find_labels _else.bstmts [])) lbls)
+    | Break(loc)                  -> dbw t (List.append hl lbls)
+    | Continue(loc)               -> dbw t (List.append hl lbls)
+    | Return(expr,loc)            -> dbw t (List.append hl lbls)
+    | Goto(stmtref, loc)          -> dbw t (List.append hl lbls)
+    | TryFinally(b, b2, loc)        -> dump_stmt "TryFinally" h; raise TryStmtNotSupported; dbw t []
+    | TryExcept(b, ilexpp, b2, loc) -> dump_stmt "TryExcept"  h; raise TryStmtNotSupported; dbw t []  in
+
+  dbw stmts []
+
+let rec fixup_labels (stmts : stmt list) (lbls: stmt list) : stmt list =
+  let rec find_labeled_statement s ls =
+    match ls with
+    | [] -> (Printf.fprintf stderr "%s\n" s); raise LabelNotFound
+    | h :: t ->
+        let rec find_label lls = match lls with
+        | [] -> find_labeled_statement s t 
+        | Label(str, _, _ ) :: lt when str = s -> h
+        | lh :: lt -> find_label lt in 
+        find_label h.labels in
+  let rec dbw (stmts : stmt list) : stmt list = match stmts with
+  | [] -> []
+  | h :: t -> 
+      match h.skind with
+    | Block(b)                    -> (fixup_labels b.bstmts); dbw t
+    | Loop(b, loc, s1, s2)        -> (fixup_labels b.bstmts); dbw t
+    | Switch(expr, b, stmts, loc) -> (fixup_labels b.bstmts); dbw t
+    | Instr(is)                   -> dbw t
+    | If(expr, _then, _else, loc) -> fixup_labels _then.bstmts; fixup_labels _else.bstmts; dbw t
+    | Break(loc)                  -> dbw t
+    | Continue(loc)               -> dbw t
+    | Return(expr,loc)            -> dbw t
+    | Goto(stmtref,loc)           ->
+        (match List.hd( (!stmtref).labels) with
+        | Label(s, l, b) -> h.skind <- Goto( ref (find_labeled_statement s lbls), loc); dbw t
+        | _ -> raise FirstLabelDoesntMatch)
+    | TryFinally(b, b2, loc)        -> dump_stmt "TryFinally" h; raise TryStmtNotSupported; dbw t
+    | TryExcept(b, ilexpp, b2, loc) -> dump_stmt "TryExcept"  h; raise TryStmtNotSupported; dbw t in
+
+  dbw stmts
