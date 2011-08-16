@@ -52,7 +52,8 @@ let prepend_type_ t = match t with
 let remove_static v = { v with
   vstorage    = (match v.vstorage with
                   | Static ->   NoStorage
-                  | _ -> v.vstorage); }
+                  | _ -> v.vstorage); 
+  vtype       = (prepend_type_ v.vtype);}
 
 let make_static v = { v with vstorage = Static;}
 
@@ -204,9 +205,9 @@ let rec split_block width (body : block) (loc : location) func_creator fd nexti 
     (* base case, empty list  *)
     | [] -> 
        (match newstmts with
-        | [] -> { battrs = body.battrs; bstmts = (List.rev oldstmts)}, (List.rev funcs)
+        | [] -> { battrs = body.battrs; bstmts = (List.rev oldstmts)}, funcs
         | _  -> let newcall, func = func_creator (List.rev newstmts) loc in 
-                  { battrs = body.battrs; bstmts = (List.rev (newcall :: oldstmts))}, (List.rev ( func :: funcs)))
+                  { battrs = body.battrs; bstmts = (List.rev (newcall :: oldstmts))}, ( func :: funcs))
 
     (* statement has label, make noop stmt with label *)
     | h :: t when (haslabel h) -> 
@@ -268,6 +269,12 @@ let rec split_block width (body : block) (loc : location) func_creator fd nexti 
     bw body.bstmts [] [] width []
 
 let dump_func_to_file funcN fileN =
+(*
+*)
+  let channel = open_out (fileN.fileName ^ "NORMTMPS") in
+    (* remove unuseds except for root funcN which may be static *)
+    dumpFile defaultCilPrinter channel (fileN.fileName ^ "NORMTMPS") fileN;
+    close_out channel;
   let channel = open_out fileN.fileName in
     (* remove unuseds except for root funcN which may be static *)
     if !splitrmtmps then 
