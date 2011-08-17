@@ -49,15 +49,14 @@ let prepend_type_ t = match t with
   | _ -> raise BEXN
 
 
-let remove_static v = { v with
-  vstorage    = (match v.vstorage with
-                  | Static ->   NoStorage
-                  | _ -> v.vstorage); 
-  vtype       = (prepend_type_ v.vtype);}
+let remove_static v = 
+  v.vstorage <- NoStorage;
+  v.vtype <- prepend_type_ v.vtype;
+  v
 
-let make_static v = { v with vstorage = Static;}
+let make_static v = v.vstorage <- Static; v
 
-let prepend_ v = { v with vname = "_UnIqUe_" ^ v.vname; }
+let prepend_ v = { v with vname = "_UnIqUe_" ^ v.vname;}
 
 (* build a GFun from a fundec, i generator, loc, and block *)
 let buildGFun (fd : fundec) nexti (loc : location) (b : block) : global =
@@ -284,12 +283,13 @@ let dump_func_to_file funcN fileN =
     fileN.fileName
 
 let make_formal_assigns fs =
-  let rec mkfa fs nfs = match fs with
-  | [] -> Instr (List.rev nfs)
+  let rec mkfa fs nfs nvs = match fs with
+  | [] -> Instr (List.rev nfs), nvs
   | h :: t ->
-    let nh = Set(((Var(h)), NoOffset), (Lval((Var(prepend_ h)), NoOffset)), h.vdecl) in
-    mkfa t (nh :: nfs) in
-  mkfa fs []
+    let v = prepend_ h in
+    let nh = Set(((Var(h)), NoOffset), (Lval((Var(v)), NoOffset)), h.vdecl) in
+    mkfa t (nh :: nfs) (v :: nvs) in
+  mkfa fs [] []
 
 
 (* Split functions into their own translation units *)
@@ -312,31 +312,33 @@ let splitFuncsToTU file =
       let nexti = (genNextCounter ()) in 
       let fun_creator = (gen_func_creator fd nexti) in
       let new_body, funcs = (split_block !splitwidth fd.sbody loc fun_creator fd nexti) in
-      let formals_assigns = (instr2stmt2 [] (make_formal_assigns fd.sformals)) in
+      let new_formals, new_vars = make_formal_assigns fd.sformals in
+      let formals_assigns = (instr2stmt2 [] new_formals) in
       let labels = find_labels new_body.bstmts [] in
       fixup_labels new_body.bstmts labels;
       (* build new Cil.GFun for func *)
+      let varinfos2GVarDecls vs = List.map (fun x -> GVarDecl((make_static x), loc)) vs in
+      let gformals = (varinfos2GVarDecls fd.sformals) in
+      let glocals = (varinfos2GVarDecls fd.slocals) in
       let funcN = GFun({ 
         svar       = remove_static fd.svar;
-        sformals   = [];
+        sformals   = List.rev new_vars;
         slocals    = [];
         smaxid     = fd.smaxid;
         sbody      = {battrs = new_body.battrs; bstmts = ( formals_assigns :: new_body.bstmts)};
         smaxstmtid = fd.smaxstmtid;
-        sallstmts  = fd.sallstmts; }, loc)
-      and varinfos2GVarDecls vs = List.map (fun x -> GVarDecl((make_static x), loc)) vs in
-      (* build new Cil.file for func *)
-        let fileN = { fileName = file.fileName ^ "_" ^ fd.C.svar.C.vname ^ ".c";
-                      globals = (List.append (List.append (List.append (List.append
-                        otherGlobals 
-                        (varinfos2GVarDecls fd.sformals)) 
-                        (varinfos2GVarDecls fd.slocals)) 
-                        (List.rev funcs))
-                        [funcN]);
-                      globinit = None; 
-                      globinitcalled = false; } in
-          dump_func_to_file funcN fileN ;
-          fileN.fileName :: fns
+        sallstmts  = fd.sallstmts; }, loc) in
+      let fileN = { fileName = file.fileName ^ "_" ^ fd.C.svar.C.vname ^ ".c";
+                    globals = (List.append (List.append (List.append (List.append
+                      otherGlobals 
+                      gformals) 
+                      glocals) 
+                      (List.rev funcs))
+                      [funcN]);
+                    globinit = None; 
+                    globinitcalled = false; } in
+        dump_func_to_file funcN fileN ;
+        fileN.fileName :: fns
     | _ -> fns) []
 
 
