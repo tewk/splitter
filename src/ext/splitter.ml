@@ -255,25 +255,21 @@ let rec split_block width (body : block) (loc : location) func_creator fd nexti 
     (* current statement is NOT splittable *)
     | h :: t -> 
 (*      dump_stmt "unsplittable" h; *)
-        let ns, nf = (if (stmt_text_len h) > chunk_size  then
-          split_stmt h loc func_creator
-        else
-          h, []) in 
        (match newstmts with
-        | [] -> bw t [] (ns :: oldstmts) width (List.append nf funcs)
+        | [] -> bw t [] (h :: oldstmts) width funcs
         | _  -> 
           let newcall, func = func_creator (List.rev newstmts) loc in 
-          bw t [] (ns :: (newcall :: oldstmts)) width (List.append nf (func :: funcs))) in
+          bw t [] (h :: (newcall :: oldstmts)) width (func :: funcs)) in
 
     bw body.bstmts [] [] width []
 
 let dump_func_to_file funcN fileN =
 (*
-*)
   let channel = open_out (fileN.fileName ^ "NORMTMPS") in
     (* remove unuseds except for root funcN which may be static *)
     dumpFile defaultCilPrinter channel (fileN.fileName ^ "NORMTMPS") fileN;
     close_out channel;
+*)
   let channel = open_out fileN.fileName in
     (* remove unuseds except for root funcN which may be static *)
     if !splitrmtmps then 
