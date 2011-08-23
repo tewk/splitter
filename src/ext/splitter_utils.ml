@@ -184,6 +184,20 @@ let rec hasRGCs (stmts : stmt list) : bool =
     dbw stmts
 
 let rec hasUnsplittables (stmts : stmt list) : bool =
+  let rec  find_va_start_end is =
+    match is with
+    | [] -> false
+    | h :: t -> 
+      (match h with 
+      |  Call(_, Lval( Var({ vname = vn}), _), _, _) when (vn == "__builtin_va_start") -> 
+          (*Printf.fprintf stderr  "VACALL %s\n" vn;*) true
+      |  Call(_, Lval( Var({ vname = vn}), _), _, _) -> 
+          (match vn with
+          | "__builtin_va_start" -> true
+          | "__builtin_va_arg" -> false
+          | "__builtin_va_end" -> false
+          | _  -> Printf.fprintf stderr "CALL X%sX\n" vn; false)
+      |  _ -> find_va_start_end t) in
   let rec dbw (stmts : stmt list) : bool = match stmts with
   | [] -> false
   | h :: t -> 
@@ -192,7 +206,7 @@ let rec hasUnsplittables (stmts : stmt list) : bool =
     | Block(b)                    -> hasUnsplittables b.bstmts || dbw t
     | Loop(b, loc, s1, s2)        -> hasRGs b.bstmts  || dbw t
     | Switch(expr, b, stmts, loc) -> hasRGCs b.bstmts || dbw t
-    | Instr(is)                   -> dbw t
+    | Instr(is)                   -> find_va_start_end is || dbw t
     | If(expr, _then, _else, loc) -> hasUnsplittables _then.bstmts || hasUnsplittables _else.bstmts || dbw t
     | Break(loc)                  -> true
     | Continue(loc)               -> true
