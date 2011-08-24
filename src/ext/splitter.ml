@@ -12,6 +12,7 @@ let splitrmtmps = ref false;
 exception TryStmtNotSupported
 exception AEXN
 exception BEXN
+exception Oops
 
 (* () -> () -> int *)
 (* create a incrementing counter function *)
@@ -293,9 +294,9 @@ let splitFuncsToTU file =
   let channel = open_out (file.fileName ^ "_CILOUT.DUMP") in
     dumpFile defaultCilPrinter channel (file.fileName ^ "_CILOUT.DUMP") file;
     close_out channel;
-  let otherGlobals = List.filter (fun x -> match x with
-      Cil.GFun(fd ,_) -> false
-      | a -> true) 
+  let otherGlobals = List.map (fun x -> match x with
+      Cil.GFun(fd, loc) -> Cil.GVarDecl(fd.svar, loc)
+      | a -> a) 
     file.globals in 
   Cil.foldGlobals file (fun fns func -> match func with
     Cil.GFun(fd, loc) ->
@@ -325,12 +326,12 @@ let splitFuncsToTU file =
         smaxstmtid = fd.smaxstmtid;
         sallstmts  = fd.sallstmts; }, loc) in
       let fileN = { fileName = file.fileName ^ "_" ^ fd.C.svar.C.vname ^ ".c";
-                    globals = (List.append (List.append (List.append (List.append
-                      otherGlobals 
-                      gformals) 
-                      glocals) 
-                      (List.rev funcs))
-                      [funcN]);
+                    globals = List.concat [
+                      otherGlobals; 
+                      gformals; 
+                      glocals; 
+                      (List.rev funcs);
+                      [funcN] ];
                     globinit = None; 
                     globinitcalled = false; } in
         dump_func_to_file funcN fileN ;

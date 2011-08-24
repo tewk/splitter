@@ -196,7 +196,7 @@ let rec hasUnsplittables (stmts : stmt list) : bool =
           | "__builtin_va_start" -> true
           | "__builtin_va_arg" -> false
           | "__builtin_va_end" -> false
-          | _  -> Printf.fprintf stderr "CALL X%sX\n" vn; false)
+          | _  -> (* Printf.fprintf stderr "CALL X%sX\n" vn;*) false)
       |  _ -> find_va_start_end t) in
   let rec dbw (stmts : stmt list) : bool = match stmts with
   | [] -> false
