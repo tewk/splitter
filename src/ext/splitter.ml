@@ -226,10 +226,10 @@ let rec split_block width (body : block) (loc : location) func_creator fd nexti 
          preds = []} in
       let noop, ns = mknooplabel h in
       (match newstmts with
-      | [] -> bw t [ns] ( noop :: oldstmts) width funcs
+      | [] -> bw (ns::t) [] ( noop :: oldstmts) width funcs
       | _  -> 
        let newcall, func = func_creator (List.rev newstmts) loc in 
-       bw t [ns] (noop :: (newcall :: oldstmts)) width (func :: funcs))
+       bw (ns::t) [] (noop :: (newcall :: oldstmts)) width (func :: funcs))
 
 
     (* current statement is splittable *)
