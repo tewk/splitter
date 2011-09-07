@@ -49,13 +49,31 @@ let prepend_type_ t = match t with
   | TBuiltin_va_list(a) ->    Printf.fprintf stderr "***Oops11***"; raise AEXN
   | _ -> raise BEXN
 
+let printtype v = match v.vtype with
+  | TFun(a, b, c, d) ->       Printf.fprintf stderr "TFun %s\n" v.vname
+  | TInt(a,b) ->              Printf.fprintf stderr "TInt %s\n" v.vname 
+  | TFloat(a,b) ->            Printf.fprintf stderr "TFloat %s\n" v.vname 
+  | TPtr(a,b) ->              Printf.fprintf stderr "TPtr %s\n" v.vname 
+  | TArray(a,b,c) ->          Printf.fprintf stderr "TArray %s\n" v.vname 
+  | TVoid(a) ->               Printf.fprintf stderr "TVoid %s\n" v.vname 
+  | TNamed(a,b) ->            Printf.fprintf stderr "TNamed %s %s\n" a.tname v.vname 
+  | TComp(a,b) ->             Printf.fprintf stderr "Tcomp %s\n" v.vname 
+  | TEnum(a,b) ->             Printf.fprintf stderr "TEnum %s\n" v.vname 
+  | TBuiltin_va_list(a) ->    Printf.fprintf stderr "TBuiltin_va_list %s\n" v.vname 
+  | _ -> raise BEXN
 
 let remove_static v = 
   v.vstorage <- NoStorage;
   v.vtype <- prepend_type_ v.vtype;
   v
 
-let make_static v = v.vstorage <- Static; v
+let make_static v = 
+  (* fix va_list *ap global variables *)
+  (match v.vtype with 
+  | TNamed({tname = "va_list";}, _) -> v.vtype <- TBuiltin_va_list([]); ()
+  | _ -> ();
+  v.vstorage <- Static); 
+  v
 
 let prepend_ v = { v with vname = "_UnIqUe_" ^ v.vname;}
 
@@ -288,6 +306,9 @@ let make_formal_assigns fs =
     mkfa t (nh :: nfs) (v :: nvs) in
   mkfa fs [] []
 
+let remove_static_from_func f =
+  match f with
+  |  Cil.GFun(fd, loc) -> Cil.GFun({fd with svar = (remove_static fd.svar)}, loc)
 
 (* Split functions into their own translation units *)
 let splitFuncsToTU file =
@@ -296,12 +317,15 @@ let splitFuncsToTU file =
     close_out channel;
   let otherGlobals = List.map (fun x -> match x with
       Cil.GFun(fd, loc) -> Cil.GVarDecl(fd.svar, loc)
-      | a -> a) 
+      | a -> (match a with 
+        | GVar(vi, ii, loc) -> (Printf.fprintf stderr "-- %s\n" vi.vname); a
+        | GVarDecl(vi, loc) -> (Printf.fprintf stderr "** %s\n" vi.vname); a
+        | b -> b))
     file.globals in 
   Cil.foldGlobals file (fun fns func -> match func with
     Cil.GFun(fd, loc) ->
       let fileOld = { fileName = file.fileName ^ "_" ^ fd.C.svar.C.vname ^ ".c.orig";
-                    globals = (List.append otherGlobals [func]);
+                    globals = (List.append otherGlobals [(remove_static_from_func func)]);
                     globinit = None; 
                     globinitcalled = false; } in
         dump_func_to_file func fileOld ;
@@ -339,11 +363,16 @@ let splitFuncsToTU file =
     | _ -> fns) []
 
 
+let dump_list_to_file lst fn =
+  let oc = open_out fn in
+  List.iter (Printf.fprintf oc "%s\n") lst;
+  close_out oc
 
 let dosplitter file =
   ignore (Partial.calls_end_basic_blocks file) ; 
   ignore (Partial.globally_unique_vids file) ; 
-  make_make_file (splitFuncsToTU file)
+  let filenames = (splitFuncsToTU file) in
+    dump_list_to_file filenames (file.fileName ^ ".filelst")
 
 (*
   Cil.iterGlobals file (fun glob -> match glob with
