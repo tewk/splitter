@@ -1,8 +1,10 @@
 open Pretty
 open Cil
 open Splitter_utils
+module E = Errormsg
 module C = Cil
 module RD = Reachingdefs
+module H = Hashtbl
 
 (* command-line options *)
 let splitwidth  = ref 4
@@ -20,75 +22,98 @@ let genNextCounter = function () ->
   let ni = ref 0 in
     function () -> ni := (!ni + 1); !ni
 
+class dereferenceVars (map) = object (self)
+  inherit Cil.nopCilVisitor
 
-(* print list of strings to stderr *)
-let make_make_file lst =
-  let rec w o lst = match lst with
-  | [] -> ()
-  | h :: t -> (fprintf o "%s\n" h); w o t in
-    w stderr lst
+  method vlval l = match l with
+  | Var (v) , o -> 
+      if v.vglob then DoChildren else
+    (try
+     ChangeTo(Mem(Lval(Var(H.find map v.vname), NoOffset)),
+     visitCilOffset (new dereferenceVars(map)) o)
+    with Not_found -> DoChildren)
+  | Mem (e), o ->
+     (*Printf.fprintf stderr "### expr ###";
+     fprint stderr 80 (defaultCilPrinter#pExp () e);
+     Printf.fprintf stderr "\n"; *)
+     DoChildren
 
-let prepend_type_ t = match t with
-  | TFun (tt, Some ats, b, attrs) ->
-    let rec ptw ats nats =
-      (match ats with
-      | [] -> List.rev nats
-      | (s, ty, at) :: tl -> ptw tl (( "_UnIqUe_" ^ s, ty, at) :: nats)) in
-    let xnats = ptw ats [] in
-    TFun(tt, Some xnats, b, attrs)
-  | TFun(tt, None, b, attrs) -> t
-  | TFun(a, b, c, d) ->       Printf.fprintf stderr "***Oops1 ***"; raise AEXN
-  | TInt(a,b) ->              Printf.fprintf stderr "***Oops3 ***"; raise AEXN
-  | TFloat(a,b) ->            Printf.fprintf stderr "***Oops4 ***"; raise AEXN
-  | TPtr(a,b) ->              Printf.fprintf stderr "***Oops5 ***"; raise AEXN
-  | TArray(a,b,c) ->          Printf.fprintf stderr "***Oops6 ***"; raise AEXN
-  | TVoid(a) ->               Printf.fprintf stderr "***Oops7 ***"; raise AEXN
-  | TNamed(a,b) ->            Printf.fprintf stderr "***Oops8 ***"; raise AEXN
-  | TComp(a,b) ->             Printf.fprintf stderr "***Oops9 ***"; raise AEXN
-  | TEnum(a,b) ->             Printf.fprintf stderr "***Oops10***"; raise AEXN
-  | TBuiltin_va_list(a) ->    Printf.fprintf stderr "***Oops11***"; raise AEXN
-  | _ -> raise BEXN
+  | _ -> DoChildren
 
-let printtype v = match v.vtype with
-  | TFun(a, b, c, d) ->       Printf.fprintf stderr "TFun %s\n" v.vname
-  | TInt(a,b) ->              Printf.fprintf stderr "TInt %s\n" v.vname 
-  | TFloat(a,b) ->            Printf.fprintf stderr "TFloat %s\n" v.vname 
-  | TPtr(a,b) ->              Printf.fprintf stderr "TPtr %s\n" v.vname 
-  | TArray(a,b,c) ->          Printf.fprintf stderr "TArray %s\n" v.vname 
-  | TVoid(a) ->               Printf.fprintf stderr "TVoid %s\n" v.vname 
-  | TNamed(a,b) ->            Printf.fprintf stderr "TNamed %s %s\n" a.tname v.vname 
-  | TComp(a,b) ->             Printf.fprintf stderr "Tcomp %s\n" v.vname 
-  | TEnum(a,b) ->             Printf.fprintf stderr "TEnum %s\n" v.vname 
-  | TBuiltin_va_list(a) ->    Printf.fprintf stderr "TBuiltin_va_list %s\n" v.vname 
-  | _ -> raise BEXN
+  method voffs o = 
+    (*
+     Printf.fprintf stderr "*** offset ***";
+     fprint stderr 80 (defaultCilPrinter#pOffset (Pretty.text("k")) o);
+     Printf.fprintf stderr "\n";
+     *)
+    
+    match o with
+  | Index(e, oof) -> DoChildren
+  | _ -> DoChildren
+  (*
+  *)
+  method vexpr e = match e with
+  |  SizeOf(t) ->
+     (*
+     Printf.fprintf stderr "*** expr ***";
+     fprint stderr 80 (defaultCilPrinter#pType None () t);
+     Printf.fprintf stderr "\n";
+     *)
+     DoChildren
+  |  SizeOfE(ee) ->
+     (*
+     Printf.fprintf stderr "--- expr ---";
+     fprint stderr 80 (defaultCilPrinter#pExp () ee);
+     Printf.fprintf stderr "\n";
+     *)
+     DoChildren
+  | _ -> DoChildren
 
-let remove_static v = 
-  v.vstorage <- NoStorage;
-  v.vtype <- prepend_type_ v.vtype;
-  v
+  method vinitoffs o = match o with
+  | _ -> DoChildren
 
-let make_static v = 
-  (* fix va_list *ap global variables *)
-  (match v.vtype with 
-  | TNamed({tname = "va_list";}, _) -> v.vtype <- TBuiltin_va_list([]); ()
-  | _ -> ();
-  v.vstorage <- Static); 
-  v
+end
 
-let prepend_ v = { v with vname = "_UnIqUe_" ^ v.vname;}
+let addrofVar v = { v with vtype = TPtr(v.vtype, []);}
+
+let fixupTArray map t = match t with
+  | TPtr( TArray( ty, Some(ex), at), at2) -> 
+       Printf.fprintf stderr "--- TArray ---";
+       fprint stderr 80 (defaultCilPrinter#pExp () ex);
+       Printf.fprintf stderr "\n";
+
+      let nex = visitCilExpr (new dereferenceVars(map)) ex in
+       Printf.fprintf stderr "--- TArray ---";
+       fprint stderr 80 (defaultCilPrinter#pExp () nex);
+       Printf.fprintf stderr "\n";
+      TPtr(TArray(ty, Some(nex), at), at2)
+  | _ -> t
+
+let fixupTArrayVar map v = { v with vtype = fixupTArray map v.vtype; }
+
+let change_out_vars b map =
+  visitCilBlock (new dereferenceVars(map)) b
 
 (* build a GFun from a fundec, i generator, loc, and block *)
-let buildGFun (fd : fundec) nexti (loc : location) (b : block) : global =
+let buildGFun (fd : fundec) localvars nexti (loc : location) (b : block) : global =
+  let newlv = (List.map addrofVar localvars) in
+  let map : (string, varinfo) H.t = H.create 113 in
+  let k = List.iter (fun x -> (H.add map x.vname x)) newlv in
+  let params = match localvars with
+  | [] -> None
+  | _  -> Some (List.map (fun x -> x.vname, (fixupTArray map (TPtr(x.vtype, []))), []) localvars) in
   let appendVarName v = { v with
     vname       = v.vname ^ "_" ^ (string_of_int (nexti ()));
-    vtype       = TFun(voidType,None,false,[]);
+    vtype       = TFun(voidType,params,false,[]);
     vstorage    = Static; } in
+  let newb = change_out_vars b map in
+  let nnewlv = (List.map (fixupTArrayVar map) newlv) in
   
   GFun({ fd with
         svar       = appendVarName fd.svar;
-        sformals   = [];
+        sformals   = nnewlv;
         slocals    = [];
-        sbody      = b;
+        sbody      = newb;
         }, loc)
 
 exception Not_A_GFun_NEVER_GET_HERE
@@ -100,9 +125,9 @@ let instr2plain_stmt stkind = instr2stmt2 [] stkind
 let instr2stmt  stmt stkind = instr2stmt2 stmt.labels stkind
 let empty_stmt = {labels = []; skind = Instr([]); sid = 0; succs = []; preds = []}
 
-let func2call_stmt fnvar labels loc =
+let func2call_stmt fnvar args labels loc =
   {labels = labels; 
-  skind = Instr [Call(None, Lval( Var(fnvar), NoOffset), [], loc)]; 
+  skind = Instr [Call(None, Lval( Var(fnvar), NoOffset), args, loc)]; 
   sid = 0; 
   succs = []; 
   preds = []}
@@ -119,11 +144,13 @@ let dump_stmt d s =
 
 (* generates a callstmt and function definition from a stmt list *)
 let gen_func_creator fd nexti =
-  (fun stmts loc ->
-    let blockfunc = (buildGFun fd nexti loc {battrs = fd.sbody.battrs; bstmts = stmts} ) in
+  (fun localvars stmts loc ->
+    let blockfunc = (buildGFun fd localvars nexti loc {battrs = fd.sbody.battrs; bstmts = stmts} ) in
      (match blockfunc with
      | GFun(fn, floc) -> 
-         let callstmt = func2call_stmt fn.svar (List.hd stmts).labels floc in
+         let args = (List.map (fun x -> (Cil.mkAddrOrStartOf ((Var x),
+         NoOffset))) localvars) in
+         let callstmt = func2call_stmt fn.svar args (List.hd stmts).labels floc in
            (callstmt, blockfunc)
      | _ -> raise Not_A_GFun_NEVER_GET_HERE))
 
@@ -135,30 +162,6 @@ let stmt_text_len (s : stmt) : int =
   Printf.fprintf stderr "$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$ %i\n" len;
 *)
   len
-
-let move_condition_to_func expr loc fd nexti =  
-  let make_unique_function_name_for_expr v = {
-    vname       = v.vname ^ "_" ^ (string_of_int (nexti ()));
-    vtype       = TInt(IInt, []);
-    vstorage    = Static;
-    vglob       = v.vglob;
-    vinline     = v.vinline;
-    vattr       = v.vattr;
-    vdecl       = v.vdecl;
-    vid         = v.vid;
-    vaddrof     = v.vaddrof;
-    vreferenced = v.vreferenced;
-    vdescr      = v.vdescr;
-    vdescrpure  = v.vdescrpure;} in
-  (func2call_stmt fd.svar [] loc), 
-  GFun({ 
-        svar       = make_unique_function_name_for_expr fd.svar;
-        sformals   = [];
-        slocals    = [];
-        smaxid     = fd.smaxid;
-        sbody      = {battrs = fd.sbody.battrs; bstmts = [ (instr2plain_stmt (Return( Some expr, loc)))]};
-        smaxstmtid = fd.smaxstmtid;
-        sallstmts  = fd.sallstmts; }, loc)
 
 let split_list l =
   let isl = List.length l in
@@ -174,38 +177,35 @@ let haslabel h = match h with
   | { labels = [] } -> false
   | _ -> true
 
-let rec split_block width (body : block) (loc : location) func_creator fd nexti =
+let rec split_block localvars width (body : block) (loc : location) func_creator fd nexti =
   let rec split_stmt s loc func_creator =
     match s.skind with
     | Block(b) -> 
-        let nb, nf = split_block width b loc func_creator fd nexti in
+        let nb, nf = split_block localvars width b loc func_creator fd nexti in
         let st = instr2stmt s (Block(nb)) in
         st, nf
     | Loop(b, loc, s1, s2) -> 
         (* dump_stmt "Loop" h; *)
-        let nb, nf = split_block width b loc func_creator fd nexti in
+        let nb, nf = split_block localvars width b loc func_creator fd nexti in
         let st = instr2stmt s (Loop(nb, loc, s1, s2)) in
         st, nf
     | Switch(exp1, b, stmts, loc) ->
-        let nb, nf = split_block width b loc func_creator fd nexti in
+        let nb, nf = split_block localvars width b loc func_creator fd nexti in
         let st = instr2stmt s (Switch(exp1, nb, stmts, loc)) in
         st, nf
     | Instr(is) ->
         let l1, l2 = split_list is in
-        let c1, f1 = func_creator [ (instr2stmt s (Instr(l1))) ] loc in
-        let c2, f2 = func_creator [ (instr2stmt s (Instr(l2))) ] loc in
+        let c1, f1 = func_creator localvars [ (instr2stmt s (Instr(l1))) ] loc in
+        let c2, f2 = func_creator localvars [ (instr2stmt s (Instr(l2))) ] loc in
         let nb = {battrs = []; bstmts = [c1; c2]} in
         let nst = instr2stmt s (Block(nb)) in
         let nfuncs = [f1; f2] in
         nst, nfuncs
     | If(expr, _then, _else, loc) ->
       (* dump_stmt "If" h; *)
-      let tnew_body, tnfuncs = split_block width _then loc func_creator fd nexti in
-      let enew_body, enfuncs = split_block width _else loc func_creator fd nexti in
-(*
-      let nexpr, nstmt, efunc = move_condition_to_func expr loc fd nexti in 
-      let assign_instr = instr2stmt s (
-*)
+      let tnew_body, tnfuncs = split_block localvars width _then loc func_creator fd nexti in
+      let enew_body, enfuncs = split_block localvars width _else loc func_creator fd nexti in
+
       let st = instr2stmt s (If(expr, tnew_body, enew_body, loc)) in
         st, (List.append tnfuncs enfuncs)
     | Break(loc)    -> s, []
@@ -224,7 +224,7 @@ let rec split_block width (body : block) (loc : location) func_creator fd nexti 
     | [] -> 
        (match newstmts with
         | [] -> { battrs = body.battrs; bstmts = (List.rev oldstmts)}, funcs
-        | _  -> let newcall, func = func_creator (List.rev newstmts) loc in 
+        | _  -> let newcall, func = func_creator localvars (List.rev newstmts) loc in 
                   { battrs = body.battrs; bstmts = (List.rev (newcall :: oldstmts))}, ( func :: funcs))
 
     (* statement has label, make noop stmt with label *)
@@ -246,7 +246,7 @@ let rec split_block width (body : block) (loc : location) func_creator fd nexti 
       (match newstmts with
       | [] -> bw (ns::t) [] ( noop :: oldstmts) width funcs
       | _  -> 
-       let newcall, func = func_creator (List.rev newstmts) loc in 
+       let newcall, func = func_creator localvars (List.rev newstmts) loc in 
        bw (ns::t) [] (noop :: (newcall :: oldstmts)) width (func :: funcs))
 
 
@@ -255,7 +255,7 @@ let rec split_block width (body : block) (loc : location) func_creator fd nexti 
 (*      dump_stmt "splittable" h; *)
        (match left with
         | 0 -> 
-          let newcall, func = func_creator (List.rev newstmts) loc in 
+          let newcall, func = func_creator localvars (List.rev newstmts) loc in 
           bw (h :: t) [] (newcall :: oldstmts) width (func :: funcs)
         | _ -> 
           begin
@@ -277,7 +277,7 @@ let rec split_block width (body : block) (loc : location) func_creator fd nexti 
        (match newstmts with
         | [] -> bw t [] (h :: oldstmts) width funcs
         | _  -> 
-          let newcall, func = func_creator (List.rev newstmts) loc in 
+          let newcall, func = func_creator localvars (List.rev newstmts) loc in 
           bw t [] (h :: (newcall :: oldstmts)) width (func :: funcs)) in
 
     bw body.bstmts [] [] width []
@@ -297,94 +297,43 @@ let dump_func_to_file funcN fileN =
     close_out channel;
     fileN.fileName
 
-let make_formal_assigns fs =
-  let rec mkfa fs nfs nvs = match fs with
-  | [] -> Instr (List.rev nfs), nvs
-  | h :: t ->
-    let v = prepend_ h in
-    let nh = Set(((Var(h)), NoOffset), (Lval((Var(v)), NoOffset)), h.vdecl) in
-    mkfa t (nh :: nfs) (v :: nvs) in
-  mkfa fs [] []
-
-let remove_static_from_func f =
-  match f with
-  |  Cil.GFun(fd, loc) -> Cil.GFun({fd with svar = (remove_static fd.svar)}, loc)
-
 (* Split functions into their own translation units *)
 let splitFuncsToTU file =
   let channel = open_out (file.fileName ^ "_CILOUT.DUMP") in
     dumpFile defaultCilPrinter channel (file.fileName ^ "_CILOUT.DUMP") file;
     close_out channel;
-  let otherGlobals = List.map (fun x -> match x with
-      Cil.GFun(fd, loc) -> Cil.GVarDecl(fd.svar, loc)
-      | a -> (match a with 
-        | GVar(vi, ii, loc) -> (Printf.fprintf stderr "-- %s\n" vi.vname); a
-        | GVarDecl(vi, loc) -> (Printf.fprintf stderr "** %s\n" vi.vname); a
-        | b -> b))
-    file.globals in 
-  Cil.foldGlobals file (fun fns func -> match func with
-    Cil.GFun(fd, loc) ->
-      let fileOld = { fileName = file.fileName ^ "_" ^ fd.C.svar.C.vname ^ ".c.orig";
-                    globals = (List.append otherGlobals [(remove_static_from_func func)]);
-                    globinit = None; 
-                    globinitcalled = false; } in
-        dump_func_to_file func fileOld ;
-      Printf.fprintf stderr "============== %s ==============\n" fd.svar.vname;
-      let nexti = (genNextCounter ()) in 
-      let fun_creator = (gen_func_creator fd nexti) in
-      let new_body, funcs = (split_block !splitwidth fd.sbody loc fun_creator fd nexti) in
-      let new_formals, new_vars = make_formal_assigns fd.sformals in
-      let formals_assigns = (instr2stmt2 [] new_formals) in
-      let labels = find_labels new_body.bstmts [] in
-      fixup_labels new_body.bstmts labels;
-      (* build new Cil.GFun for func *)
-      let varinfos2GVarDecls vs = List.map (fun x -> GVarDecl((make_static x), loc)) vs in
-      let gformals = (varinfos2GVarDecls fd.sformals) in
-      let glocals = (varinfos2GVarDecls fd.slocals) in
-      let funcN = GFun({ 
-        svar       = remove_static fd.svar;
-        sformals   = List.rev new_vars;
-        slocals    = [];
-        smaxid     = fd.smaxid;
-        sbody      = {battrs = new_body.battrs; bstmts = ( formals_assigns :: new_body.bstmts)};
-        smaxstmtid = fd.smaxstmtid;
-        sallstmts  = fd.sallstmts; }, loc) in
-      let fileN = { fileName = file.fileName ^ "_" ^ fd.C.svar.C.vname ^ ".c";
-                    globals = List.concat [
-                      otherGlobals; 
-                      gformals; 
-                      glocals; 
-                      (List.rev funcs);
-                      [funcN] ];
-                    globinit = None; 
-                    globinitcalled = false; } in
-        dump_func_to_file funcN fileN ;
-        fileN.fileName :: fns
-    | _ -> fns) []
+  let globalsN = 
+    Cil.foldGlobals file (fun fns func -> match func with
+      Cil.GFun(fd, loc) ->
+        Printf.fprintf stderr "============== %s ==============\n" fd.svar.vname;
+        let nexti = (genNextCounter ()) in 
+        let fun_creator = (gen_func_creator fd nexti) in
+        let new_body, funcs = (split_block (List.append fd.sformals fd.slocals) !splitwidth fd.sbody loc fun_creator fd nexti) in
+        let labels = find_labels new_body.bstmts [] in
+        fixup_labels new_body.bstmts labels;
+        let funcN = GFun({ 
+          svar       = fd.svar;
+          sformals   = fd.sformals;
+          slocals    = fd.slocals;
+          smaxid     = fd.smaxid;
+          sbody      = {battrs = new_body.battrs; bstmts = new_body.bstmts};
+          smaxstmtid = fd.smaxstmtid;
+          sallstmts  = fd.sallstmts; }, loc) in
+        (List.concat [ fns; [GVarDecl(fd.svar, loc)]; (List.rev funcs); [funcN] ])
 
-
-let dump_list_to_file lst fn =
-  let oc = open_out fn in
-  List.iter (Printf.fprintf oc "%s\n") lst;
-  close_out oc
+      | _ -> (List.concat [ fns; [func] ])) [] in
+    let fileN = { fileName = file.fileName ^ "_split.c";
+                  globals = globalsN;
+                  globinit = None; 
+                  globinitcalled = false; } in
+      let channel = open_out fileN.fileName in
+        dumpFile defaultCilPrinter channel fileN.fileName fileN;
+        close_out channel
 
 let dosplitter file =
   ignore (Partial.calls_end_basic_blocks file) ; 
   ignore (Partial.globally_unique_vids file) ; 
-  let filenames = (splitFuncsToTU file) in
-    dump_list_to_file filenames (file.fileName ^ ".filelst")
-
-(*
-  Cil.iterGlobals file (fun glob -> match glob with
-    Cil.GFun(fd ,_) ->
-      Cil.prepareCFG fd ;
-      (* jc: blockinggraph depends on this "true" arg *)
-      ignore (Cil.computeCFGInfo fd true);
-      ignore (Cfg.printCfgFilename (Printf.sprintf "CFG_%s.dot" fd.C.svar.C.vname) fd);
-      ignore (RD.computeRDs fd)
-      
-    | _ -> ())
-    *)
+  splitFuncsToTU file
 
 let feature : featureDescr =
   { fd_name = "splitter";
