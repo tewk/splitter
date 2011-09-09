@@ -292,6 +292,7 @@ let splitFuncsToTU file =
         (List.concat [ fns; [GVarDecl(fd.svar, loc)]; (List.rev funcs); [funcN] ])
 
       | _ -> (List.concat [ fns; [func] ])) [] in
+    file.globals <- globalsN;
     let fileN = { fileName = file.fileName ^ "_split.c";
                   globals = globalsN;
                   globinit = None; 
