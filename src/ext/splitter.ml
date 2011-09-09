@@ -32,60 +32,26 @@ class dereferenceVars (map) = object (self)
      ChangeTo(Mem(Lval(Var(H.find map v.vname), NoOffset)),
      visitCilOffset (new dereferenceVars(map)) o)
     with Not_found -> DoChildren)
-  | Mem (e), o ->
-     (*Printf.fprintf stderr "### expr ###";
-     fprint stderr 80 (defaultCilPrinter#pExp () e);
-     Printf.fprintf stderr "\n"; *)
-     DoChildren
-
   | _ -> DoChildren
-
-  method voffs o = 
-    (*
-     Printf.fprintf stderr "*** offset ***";
-     fprint stderr 80 (defaultCilPrinter#pOffset (Pretty.text("k")) o);
-     Printf.fprintf stderr "\n";
-     *)
-    
-    match o with
-  | Index(e, oof) -> DoChildren
-  | _ -> DoChildren
-  (*
-  *)
-  method vexpr e = match e with
-  |  SizeOf(t) ->
-     (*
-     Printf.fprintf stderr "*** expr ***";
-     fprint stderr 80 (defaultCilPrinter#pType None () t);
-     Printf.fprintf stderr "\n";
-     *)
-     DoChildren
-  |  SizeOfE(ee) ->
-     (*
-     Printf.fprintf stderr "--- expr ---";
-     fprint stderr 80 (defaultCilPrinter#pExp () ee);
-     Printf.fprintf stderr "\n";
-     *)
-     DoChildren
-  | _ -> DoChildren
-
-  method vinitoffs o = match o with
-  | _ -> DoChildren
-
 end
 
-let addrofVar v = { v with vtype = TPtr(v.vtype, []);}
+let addrofVar v = match v.vtype with
+  | TNamed({ tname="va_list"}, a) -> v
+  | _ -> { v with vtype = TPtr(v.vtype, []);}
 
 let fixupTArray map t = match t with
   | TPtr( TArray( ty, Some(ex), at), at2) -> 
+      (*
        Printf.fprintf stderr "--- TArray ---";
        fprint stderr 80 (defaultCilPrinter#pExp () ex);
        Printf.fprintf stderr "\n";
-
+      *)
       let nex = visitCilExpr (new dereferenceVars(map)) ex in
+      (*
        Printf.fprintf stderr "--- TArray ---";
        fprint stderr 80 (defaultCilPrinter#pExp () nex);
        Printf.fprintf stderr "\n";
+      *)
       TPtr(TArray(ty, Some(nex), at), at2)
   | _ -> t
 
@@ -98,7 +64,9 @@ let change_out_vars b map =
 let buildGFun (fd : fundec) localvars nexti (loc : location) (b : block) : global =
   let newlv = (List.map addrofVar localvars) in
   let map : (string, varinfo) H.t = H.create 113 in
-  let k = List.iter (fun x -> (H.add map x.vname x)) newlv in
+  List.iter (fun x -> (match x.vtype with 
+    | TNamed({ tname="va_list"}, a) -> ()
+    | _  -> (H.add map x.vname x))) newlv;
   let params = match localvars with
   | [] -> None
   | _  -> Some (List.map (fun x -> x.vname, (fixupTArray map (TPtr(x.vtype, []))), []) localvars) in
@@ -148,8 +116,9 @@ let gen_func_creator fd nexti =
     let blockfunc = (buildGFun fd localvars nexti loc {battrs = fd.sbody.battrs; bstmts = stmts} ) in
      (match blockfunc with
      | GFun(fn, floc) -> 
-         let args = (List.map (fun x -> (Cil.mkAddrOrStartOf ((Var x),
-         NoOffset))) localvars) in
+         let args = (List.map (fun x -> (match x.vtype with
+         | TNamed({ tname="va_list"}, a) -> Lval((Var x), NoOffset)
+         | _ -> (Cil.mkAddrOrStartOf ((Var x), NoOffset)))) localvars) in
          let callstmt = func2call_stmt fn.svar args (List.hd stmts).labels floc in
            (callstmt, blockfunc)
      | _ -> raise Not_A_GFun_NEVER_GET_HERE))
@@ -297,6 +266,7 @@ let dump_func_to_file funcN fileN =
     close_out channel;
     fileN.fileName
 
+
 (* Split functions into their own translation units *)
 let splitFuncsToTU file =
   let channel = open_out (file.fileName ^ "_CILOUT.DUMP") in
@@ -327,6 +297,8 @@ let splitFuncsToTU file =
                   globinit = None; 
                   globinitcalled = false; } in
       let channel = open_out fileN.fileName in
+        if !splitrmtmps then 
+          Rmtmps.removeUnusedTemps ~isRoot:(fun x -> (Rmtmps.isExportedRoot x)) fileN;
         dumpFile defaultCilPrinter channel fileN.fileName fileN;
         close_out channel
 
