@@ -7,8 +7,8 @@ module RD = Reachingdefs
 module H = Hashtbl
 
 (* command-line options *)
-let splitwidth  = ref 4
-let splitsize   = ref 300
+let splitwidth  = ref 1
+let splitsize   = ref 100
 let splitrmtmps = ref false;
 
 exception TryStmtNotSupported
