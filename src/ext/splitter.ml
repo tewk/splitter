@@ -141,7 +141,7 @@ let splitFuncs file =
            | GFun(fn, floc) -> 
                let args = (List.map (fun x -> (match x.vtype with
                | TNamed({ tname="va_list"}, a) -> Lval((Var x), NoOffset)
-               | _ -> (Cil.mkAddrOrStartOf ((Var x), NoOffset)))) min_localvars) in
+               | _ -> (Cil.mkAddrOf ((Var x), NoOffset)))) min_localvars) in
                let callstmt = func2call_stmt fn.svar args (List.hd stmts).labels floc in
                  (callstmt, blockfunc, seen)
            | _ -> raise Not_A_GFun_NEVER_GET_HERE) in
