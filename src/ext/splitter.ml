@@ -36,7 +36,7 @@ class dereferenceVars (map, seen) = object (self)
   | _ -> DoChildren
 end
 
-let addrofVar v = match v.vtype with
+let deref v = match v.vtype with
   | TNamed({ tname="va_list"}, a) -> v
   | _ -> { v with vtype = TPtr(v.vtype, []);}
 
@@ -111,7 +111,7 @@ let splitFuncs file =
         (* generates a callstmt and function definition from a stmt list *)
         let func_creator localvars stmts loc =
           let b = {battrs = fd.sbody.battrs; bstmts = stmts} in
-          let newlv = (List.map addrofVar localvars) in
+          let newlv = (List.map deref localvars) in
           let seen : (string, int) H.t = H.create 113 in
           let map : (string, varinfo) H.t = H.create 113 in
           List.iter (fun x -> H.add map x.vname x) newlv;
